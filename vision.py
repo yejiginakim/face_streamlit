@@ -10,7 +10,7 @@ except Exception:
     pass
 
 # 경로/고정 치수
-FRAMES_DIR = "frames/images"
+FRAMES_DIR = "frames/Images"
 ANTENA_FILE = "Antena_01.png"  # ← 여기에 파일 두세요 (가능하면 RGBA PNG)
 A_FIXED = 52.7
 DBL_FIXED = 20.0
