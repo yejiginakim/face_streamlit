@@ -74,8 +74,12 @@ k_ratio = (TOTAL / GCD) if GCD else 2.0
 st.caption(f"A={A}, DBL={DBL}, TOTAL={TOTAL} → GCD={GCD}, k=TOTAL/GCD={k_ratio:.3f}")
 
 # 프린지 보정(프레임이 밝거나 흴 때 권장)
-if white_frame:
-    fg_bgra = vision.dematte_any_color(fg_bgra, matte_color=(255,255,255))
+# 프린지 보정(프레임이 밝거나 흴 때 권장)
+if white_frame and hasattr(vision, "dematte_any_color"):
+    fg_bgra = vision.dematte_any_color(fg_bgra, matte_color=(255, 255, 255))
+elif white_frame:
+    st.warning("프린지 제거 함수( dematte_any_color )가 vision.py에 없어서 건너뜀")
+
 
 # ---------- 얼굴 업로드 필요 ----------
 if not img_file:

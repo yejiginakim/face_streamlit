@@ -177,3 +177,31 @@ def overlay_rgba(bg_bgr: np.ndarray, fg_bgra: np.ndarray, x: int, y: int) -> np.
     out    = fg_rgb*alpha + bg_roi*(1-alpha)
     bg_bgr[y0:y1, x0:x1, :] = out.astype(np.uint8)
     return bg_bgr
+
+def dematte_any_color(fg_bgra: np.ndarray, matte_color=None) -> np.ndarray:
+    """
+    가장자리 매트색 프린지 제거 (프레임이 흰/밝아도 안전)
+    matte_color=(255,255,255)로 고정하거나, None이면 자동추정
+    """
+    if fg_bgra is None or fg_bgra.ndim != 3 or fg_bgra.shape[2] != 4:
+        return fg_bgra
+    b, g, r, a = cv2.split(fg_bgra)
+    a_f = a.astype(np.float32) / 255.0
+    eps = 1e-6
+
+    if matte_color is None:
+        m = 8
+        border = np.concatenate([fg_bgra[:m,:,:], fg_bgra[-m:,:,:],
+                                 fg_bgra[:, :m,:], fg_bgra[:, -m:,:]], axis=0)
+        mb, mg, mr, _ = [np.median(c) for c in cv2.split(border)]
+    else:
+        mb, mg, mr = matte_color
+
+    b = np.clip((b.astype(np.float32) - (1-a_f)*mb) / np.maximum(a_f, eps), 0, 255)
+    g = np.clip((g.astype(np.float32) - (1-a_f)*mg) / np.maximum(a_f, eps), 0, 255)
+    r = np.clip((r.astype(np.float32) - (1-a_f)*mr) / np.maximum(a_f, eps), 0, 255)
+
+    a = cv2.erode(a, np.ones((3,3), np.uint8), iterations=1)
+    a = cv2.GaussianBlur(a, (5,5), 1)
+
+    return cv2.merge([b.astype(np.uint8), g.astype(np.uint8), r.astype(np.uint8), a])
