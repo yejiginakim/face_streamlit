@@ -136,6 +136,10 @@ if pd_px is None:
 
 st.write(f"**PD_px**: {pd_px:.2f} px  /  **angle**: {angle_deg:.2f}°  /  **mid**: {tuple(round(v,1) for v in mid)}")
 
+# 배경 제거 + 여백 트림 (vision.py 함수 호출)
+fg_bgra = vision.remove_white_to_alpha(fg_bgra, thr=240)
+fg_bgra = vision.trim_transparent(fg_bgra, pad=8)
+
 # ---------- 스케일 계산 ----------
 px_per_mm = (pd_px / PD_MM) if PD_MM else None
 if px_per_mm:

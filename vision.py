@@ -109,3 +109,28 @@ def overlay_rgba(bg_bgr: np.ndarray, fg_bgra: np.ndarray, x: int, y: int) -> np.
     bg_bgr[y0:y1, x0:x1, :] = out.astype(np.uint8)
     return bg_bgr
 
+def remove_white_to_alpha(bgra: np.ndarray, thr: int = 240) -> np.ndarray:
+    """
+    거의 흰색(>=thr) 배경을 투명 알파로 바꿔줌.
+    thr를 230~250 사이로 조절 가능.
+    """
+    if bgra is None or bgra.ndim != 3 or bgra.shape[2] != 4:
+        return bgra
+    b, g, r, a = cv2.split(bgra)
+    white = (b >= thr) & (g >= thr) & (r >= thr)
+    a[white] = 0
+    return cv2.merge([b, g, r, a])
+
+def trim_transparent(bgra: np.ndarray, pad: int = 6) -> np.ndarray:
+    """
+    알파가 0이 아닌 영역만 딱 맞게 잘라내고 가장자리로 pad 픽셀 여백을 남김.
+    """
+    if bgra is None or bgra.ndim != 3 or bgra.shape[2] != 4:
+        return bgra
+    alpha = bgra[:, :, 3]
+    ys, xs = np.where(alpha > 0)
+    if len(xs) == 0 or len(ys) == 0:
+        return bgra
+    x0, x1 = max(xs.min() - pad, 0), min(xs.max() + pad + 1, bgra.shape[1])
+    y0, y1 = max(ys.min() - pad, 0), min(ys.max() + pad + 1, bgra.shape[0])
+    return bgra[y0:y1, x0:x1]
