@@ -4,9 +4,9 @@ st.set_page_config(page_title='얼굴 실측 결과', layout='centered')
 
 # 쿼리 읽기 (?pd=..&cheek=..&nosechin=..)
 q = st.query_params
-pd = float(q.get('pd', ['nan'])[0]) if 'pd' in q else None
-cheek = float(q.get('cheek', ['nan'])[0]) if 'cheek' in q else None
-nosechin = float(q.get('nosechin', ['nan'])[0]) if 'nosechin' in q else None
+pd = float(q.get('pd') if 'pd' in q else None
+cheek = float(q.get('cheek') if 'cheek' in q else None
+nosechin = float(q.get('nosechin') if 'nosechin' in q else None
 
 st.title('🧍 얼굴 실측 결과 (from iPhone)')
 col1, col2, col3 = st.columns(3)
