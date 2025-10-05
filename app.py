@@ -2,6 +2,9 @@ import streamlit as st
 import numpy as np, cv2
 from PIL import Image
 from io import BytesIO
+import sys, platform
+import streamlit as st
+st.caption(f"Python: {sys.version} / Arch: {platform.machine()}")
 
 # ---------- 설정 ----------
 st.set_page_config(page_title="iPhone PD → 선글라스 합성 (Antena_01)", layout="wide")
