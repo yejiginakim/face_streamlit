@@ -24,6 +24,106 @@ def create_facemesh():
         max_num_faces=1
     )
 
+def _euler_from_rotation_matrix(R):
+    # ZYX 회전(roll around Z, pitch around X, yaw around Y) convention
+    # OpenCV 좌표계 기준으로 안정적인 분해
+    sy = np.sqrt(R[0,0]**2 + R[1,0]**2)
+    singular = sy < 1e-6
+    if not singular:
+        pitch = np.arctan2(R[2,1], R[2,2])   # around X
+        yaw   = np.arctan2(-R[2,0], sy)      # around Y
+        roll  = np.arctan2(R[1,0], R[0,0])   # around Z
+    else:
+        pitch = np.arctan2(-R[1,2], R[1,1])
+        yaw   = np.arctan2(-R[2,0], sy)
+        roll  = 0.0
+    return np.degrees([yaw, pitch, roll])  # (yaw, pitch, roll) in deg
+
+
+def head_pose_ypr(bgr):
+    """
+    Mediapipe FaceMesh(world) + solvePnP로 (yaw, pitch, roll) 각도(°) 반환.
+    실패 시 (None, None, None)
+    """
+    fm = create_facemesh()
+    h, w = bgr.shape[:2]
+    rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+    res = fm.process(rgb)
+    if not res.multi_face_landmarks:
+        return None, None, None
+
+    lm2d = res.multi_face_landmarks[0].landmark
+    lm3d_all = getattr(res, "multi_face_world_landmarks", None)
+    if not lm3d_all:
+        return None, None, None
+    lm3d = lm3d_all[0].landmark
+
+    # 키 포인트 인덱스 (mediapipe facemesh 468)
+    idx = {
+        "nose": 1,       # 코끝
+        "chin": 152,     # 턱
+        "l_eye": 33,     # 왼 눈 바깥
+        "r_eye": 263,    # 오른 눈 바깥
+        "l_mouth": 61,   # 입 왼쪽
+        "r_mouth": 291,  # 입 오른쪽
+    }
+
+    # 2D (픽셀)
+    img_pts = np.array([
+        [lm2d[idx["nose"]].x * w,   lm2d[idx["nose"]].y * h],
+        [lm2d[idx["chin"]].x * w,   lm2d[idx["chin"]].y * h],
+        [lm2d[idx["l_eye"]].x * w,  lm2d[idx["l_eye"]].y * h],
+        [lm2d[idx["r_eye"]].x * w,  lm2d[idx["r_eye"]].y * h],
+        [lm2d[idx["l_mouth"]].x * w,lm2d[idx["l_mouth"]].y * h],
+        [lm2d[idx["r_mouth"]].x * w,lm2d[idx["r_mouth"]].y * h],
+    ], dtype=np.float32)
+
+    # 3D (mediapipe world coords: meters 단위, 얼굴 중심 좌표계)
+    obj_pts = np.array([
+        [lm3d[idx["nose"]].x,   lm3d[idx["nose"]].y,   lm3d[idx["nose"]].z],
+        [lm3d[idx["chin"]].x,   lm3d[idx["chin"]].y,   lm3d[idx["chin"]].z],
+        [lm3d[idx["l_eye"]].x,  lm3d[idx["l_eye"]].y,  lm3d[idx["l_eye"]].z],
+        [lm3d[idx["r_eye"]].x,  lm3d[idx["r_eye"]].y,  lm3d[idx["r_eye"]].z],
+        [lm3d[idx["l_mouth"]].x,lm3d[idx["l_mouth"]].y,lm3d[idx["l_mouth"]].z],
+        [lm3d[idx["r_mouth"]].x,lm3d[idx["r_mouth"]].y,lm3d[idx["r_mouth"]].z],
+    ], dtype=np.float32)
+
+    # 카메라 내부 파라미터(대략값): fx=fy=width, cx=width/2, cy=height/2
+    fx = fy = w * 1.0
+    cx, cy = w / 2.0, h / 2.0
+    K = np.array([[fx, 0, cx],
+                  [ 0, fy, cy],
+                  [ 0,  0,  1]], dtype=np.float64)
+    dist = np.zeros(5)  # 왜곡 무시
+
+    ok, rvec, tvec = cv2.solvePnP(obj_pts, img_pts, K, dist, flags=cv2.SOLVEPNP_ITERATIVE)
+    if not ok:
+        return None, None, None
+
+    R, _ = cv2.Rodrigues(rvec)
+    yaw, pitch, roll = _euler_from_rotation_matrix(R)
+    return float(yaw), float(pitch), float(roll)
+
+
+def head_roll_angle(bgr):
+    """
+    간단 롤(roll)만: 양 눈 중심 선의 기울기(°).
+    """
+    fm = create_facemesh()
+    h, w = bgr.shape[:2]
+    rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+    res = fm.process(rgb)
+    if not res.multi_face_landmarks:
+        return None
+    lm = res.multi_face_landmarks[0].landmark
+    L_ids = [33,133,159,145]
+    R_ids = [362,263,386,374]
+    L = np.array([[lm[i].x*w, lm[i].y*h] for i in L_ids], np.float32).mean(axis=0)
+    R = np.array([[lm[i].x*w, lm[i].y*h] for i in R_ids], np.float32).mean(axis=0)
+    return float(np.degrees(np.arctan2(R[1]-L[1], R[0]-L[0])))
+
+
+
 def detect_pd_px(bgr: np.ndarray):
     """
     눈 중심 기반 PD_px, 눈선 각도(°), 중점(mid)을 계산.

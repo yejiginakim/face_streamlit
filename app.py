@@ -123,9 +123,11 @@ except Exception as e:
     st.error(f"얼굴 이미지 로드 실패: {e}")
     st.stop()
 
-# ---------- PD_px / 각도 / 중점 ----------
+
+# ---------- PD/자세/스케일/합성 ----------
+# 1) PD_px / mid (그리고 눈선 기반 roll)
 try:
-    pd_px, angle_deg, mid = vision.detect_pd_px(face_bgr)
+    pd_px, eye_roll_deg, mid = vision.detect_pd_px(face_bgr)
 except Exception as e:
     st.error(f"MediaPipe 계산 실패: {e}")
     st.stop()
@@ -134,42 +136,65 @@ if pd_px is None:
     st.error("얼굴/눈 검출 실패. 정면, 밝은 조명에서 다시 시도해 주세요.")
     st.stop()
 
-st.write(f"**PD_px**: {pd_px:.2f} px  /  **angle**: {angle_deg:.2f}°  /  **mid**: {tuple(round(v,1) for v in mid)}")
+# 2) (있으면) 3축 자세 가져오기 → 없으면 roll은 눈선 값으로
+yaw = pitch = roll = None
+if hasattr(vision, "head_pose_ypr"):
+    try:
+        yaw, pitch, roll = vision.head_pose_ypr(face_bgr)  # 각도 단위: °
+    except Exception:
+        yaw = pitch = roll = None
+if roll is None:
+    roll = eye_roll_deg
 
-# 배경 제거 + 여백 트림 (vision.py 함수 호출)
+st.write(
+    f"**PD_px**: {pd_px:.2f} px  /  "
+    f"**roll**: {roll:.2f}°{' (eye-line)' if yaw is None else ''}  /  "
+    f"**mid**: {tuple(round(v,1) for v in mid)}"
+)
+
+# 3) 프레임 PNG 클린업(흰 배경 제거 + 여백 트림)
 fg_bgra = vision.remove_white_to_alpha(fg_bgra, thr=240)
 fg_bgra = vision.trim_transparent(fg_bgra, pad=8)
 
-# ---------- 스케일 계산 ----------
+# 4) px/mm 및 목표 총폭(px) 계산
 px_per_mm = (pd_px / PD_MM) if PD_MM else None
 if px_per_mm:
     st.write(f"**px_per_mm**: {px_per_mm:.4f}")
-    target_total_px = (GCD * px_per_mm) * k
+    target_total_px = (GCD * px_per_mm) * k   # k = TOTAL/GCD
 else:
     st.warning("PD(mm)가 없어 근사 스케일로 합성합니다. (TOTAL/GCD 비율 사용)")
     target_total_px = pd_px * k
 
-# ---------- 리사이즈/회전/합성 ----------
-try:
-    h0, w0 = fg_bgra.shape[:2]
-    scale = (target_total_px / w0) * scale_mult
-    new_size = (max(1, int(w0*scale)), max(1, int(h0*scale)))
-    fg_scaled = cv2.resize(fg_bgra, new_size, interpolation=cv2.INTER_LINEAR)
+# (옵션) yaw가 크면 살짝 가로 축소(원근 보정 느낌)
+yaw_abs = abs(yaw) if yaw is not None else 0.0
+yaw_scale = 1.0 - min(yaw_abs, 25.0) * 0.01   # 최대 25°에서 25% 축소
+yaw_scale = max(0.75, yaw_scale)              # 과도 축소 방지
 
-    M = cv2.getRotationMatrix2D((fg_scaled.shape[1]/2, fg_scaled.shape[0]/2), angle_deg, 1.0)
-    fg_rot = cv2.warpAffine(
-        fg_scaled, M, (fg_scaled.shape[1], fg_scaled.shape[0]),
-        flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=(0,0,0,0)
-    )
+# 5) 리사이즈
+h0, w0 = fg_bgra.shape[:2]
+scale = (target_total_px / w0) * scale_mult * yaw_scale
+new_size = (max(1, int(w0*scale)), max(1, int(h0*scale)))
+fg_scaled = cv2.resize(fg_bgra, new_size, interpolation=cv2.INTER_LINEAR)
 
-    gx = int(mid[0] - fg_rot.shape[1] / 2) + dx
-    gy = int(mid[1] - fg_rot.shape[0] / 2) + dy
-    out = vision.overlay_rgba(face_bgr.copy(), fg_rot, gx, gy)
+# 6) 회전(roll 사용)
+M = cv2.getRotationMatrix2D((fg_scaled.shape[1]/2, fg_scaled.shape[0]/2), roll, 1.0)
+fg_rot = cv2.warpAffine(
+    fg_scaled, M, (fg_scaled.shape[1], fg_scaled.shape[0]),
+    flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=(0,0,0,0)
+)
 
-    show_image_bgr(out, caption="합성 결과")
-except Exception as e:
-    st.error(f"합성 중 오류: {e}")
-    st.stop()
+# (옵션) pitch가 아래(+)/위(-)면 세로 오프셋 조금 보정
+pitch_deg = pitch if pitch is not None else 0.0
+pitch_dy  = int(pitch_deg * 0.8)  # 0.5~1.2 사이 취향대로
+
+# 7) 위치(브리지 중심을 mid에 정렬) + 미세조정
+gx = int(mid[0] - fg_rot.shape[1] / 2) + dx
+gy = int(mid[1] - fg_rot.shape[0] / 2) + dy + pitch_dy
+
+# 8) 합성
+out = vision.overlay_rgba(face_bgr.copy(), fg_rot, gx, gy)
+show_image_bgr(out, caption="합성 결과")
+
 
 # ---------- 다운로드 ----------
 try:
