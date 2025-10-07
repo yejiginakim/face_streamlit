@@ -203,6 +203,6 @@ try:
     buf = BytesIO()
     Image.fromarray(rgb).save(buf, format="PNG")
     st.download_button("결과 PNG 다운로드", data=buf.getvalue(),
-                       file_name="Antena_01_result.png", mime="image/png")
+                       file_name="SF191SKN_004_61.png", mime="image/png")
 except Exception as e:
     st.warning(f"다운로드 준비 중 경고: {e}")

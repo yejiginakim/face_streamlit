@@ -11,8 +11,8 @@ except Exception:
 
 # 고정 프레임 경로/치수
 FRAMES_DIR  = "frames/images"
-ANTENA_FILE = "Antena_01.png"
-A_FIXED, DBL_FIXED, TOTAL_FIXED = 52.7, 20.0, 145.1  # mm
+ANTENA_FILE = "SF191SKN_004_61.png"
+A_FIXED, DBL_FIXED, TOTAL_FIXED = 61.0, 17.0, 148.0  # mm
 
 @lru_cache(maxsize=1)
 def create_facemesh():
