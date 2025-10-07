@@ -99,7 +99,7 @@ if fg_bgra is None or dims is None:
 exists(frames)={os.path.isdir('frames')}
 exists(frames/images)={os.path.isdir('frames/images')}
 list(frames/images)[:10]={os.listdir('frames/images')[:10] if os.path.isdir('frames/images') else 'N/A'}
-glob Antena_01.*={glob.glob('frames/images/Antena_01.*')}
+glob Antena_01.*={glob.glob('frames/images/SF191SKN_004_61.*')}
     """, language="text")
     st.stop()
 
