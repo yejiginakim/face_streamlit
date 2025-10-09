@@ -75,71 +75,57 @@ with colL:
 
 with colR:
     
-    gender_opts = ['female', 'male', 'unisex']
-    kind_opts = ['fashion', 'sports']
-    
-    st.markdown("### 카테고리 선택 ")
-    # --- 라디오: 조합 프리셋 ---
-    gender_choice = st.radio(
-        '성별(조합 선택)',
-        ['선택 안 함', 'female', 'male', 'unisex', 'female+unisex', 'male+unisex', 'all'],
-        horizontal=True
-    )
-    kind_choice = st.radio(
-        '분류(조합 선택)',
-        ['선택 안 함', 'fashion', 'sports', 'both'],
-        horizontal=True
-    )
+st.session_state.setdefault('gender_sel', set())
+st.session_state.setdefault('kind_sel', set())
 
-    # --- 라디오 선택 값을 실제 리스트로 매핑 ---
-    gender_map = {
-        '선택 안 함': [],
-        'female': ['female'],
-        'male': ['male'],
-        'unisex': ['unisex'],
-        'female+unisex': ['female', 'unisex'],
-        'male+unisex': ['male', 'unisex'],
-        'all': gender_opts
-    }
-    kind_map = {
-        '선택 안 함': [],
-        'fashion': ['fashion'],
-        'sports': ['sports'],
-        'both': kind_opts
-    }
+def toggle(group_key: str, name: str):
+    s = st.session_state[group_key]
+    if name in s: s.remove(name)
+    else:         s.add(name)
+    st.rerun()
 
-    use_gender = gender_map[gender_choice]
-    use_kind   = kind_map[kind_choice]
+# 2) 성별: female / male / unisex 버튼만 (토글)
+g1, g2, g3 = st.columns(3)
+with g1:
+    sel = 'female' in st.session_state.gender_sel
+    if st.button(('✅ ' if sel else '◻️ ') + 'female', key='g_f', use_container_width=True):
+        toggle('gender_sel', 'female')
+with g2:
+    sel = 'male' in st.session_state.gender_sel
+    if st.button(('✅ ' if sel else '◻️ ') + 'male', key='g_m', use_container_width=True):
+        toggle('gender_sel', 'male')
+with g3:
+    sel = 'unisex' in st.session_state.gender_sel
+    if st.button(('✅ ' if sel else '◻️ ') + 'unisex', key='g_u', use_container_width=True):
+        toggle('gender_sel', 'unisex')
 
-# --- 플래그(필요하면) ---
-is_female  = 'female'  in use_gender
-is_male    = 'male'    in use_gender
-is_unisex  = 'unisex'  in use_gender
-is_fashion = 'fashion' in use_kind
-is_sports  = 'sports'  in use_kind
+# 3) 분류: fashion / sports 버튼만 (토글)
+k1, k2 = st.columns(2)
+with k1:
+    sel = 'fashion' in st.session_state.kind_sel
+    if st.button(('✅ ' if sel else '◻️ ') + 'fashion', key='k_fa', use_container_width=True):
+        toggle('kind_sel', 'fashion')
+with k2:
+    sel = 'sports' in st.session_state.kind_sel
+    if st.button(('✅ ' if sel else '◻️ ') + 'sports', key='k_sp', use_container_width=True):
+        toggle('kind_sel', 'sports')
 
-# --- 실행 버튼: 두 그룹이 최소 1개 이상 선택됐을 때만 활성화 ---
-disabled = not (use_gender and use_kind)
-run = st.button('실행', disabled=disabled)
+# 4) 최종 값
+use_gender = sorted(st.session_state.gender_sel)
+use_kind   = sorted(st.session_state.kind_sel)
 
-if disabled:
-    st.warning('성별과 분류를 각각 최소 1개 이상 선택하세요.')
-elif run:
-    st.success(f'실행! 성별={use_gender}, 분류={use_kind}')
-    # TODO: 여기서 실제 처리 로직 수행
-
-# 예: 플래그로 사용
-is_female = 'female' in use_gender
-is_male   = 'male'   in use_gender
-is_unisex = 'unisex' in use_gender
-is_fashion = 'fashion' in use_kind
-is_sports  = 'sports'  in use_kind
-
-# 예: 세션에 저장(다른 페이지/콜백에서도 사용)
+# (선택) 세션 키로도 보관
 st.session_state['use_gender'] = use_gender
 st.session_state['use_kind']   = use_kind
 
-if err_msgs:
+# 5) 실행 버튼: 두 그룹 모두 최소 1개 선택돼야 활성화
+disabled = not (use_gender and use_kind)
+run = st.button('실행', disabled=disabled)
+if disabled:
+    st.warning('성별과 분류에서 각각 최소 1개 이상 선택하세요.')
+elif run:
+    st.success(f'실행! 성별={use_gender}, 분류={use_kind}')
+    # TODO: 실제 처리 로직if err_msgs:
     st.error("초기 임포트 경고가 있어요. 아래 로그를 확인하세요.")
     st.code("\n".join(err_msgs), language="text")
 
