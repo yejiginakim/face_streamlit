@@ -114,23 +114,7 @@ if err_msgs:
 
 st.divider()
 
-colL, colR = st.columns(2)
 
-with colL:
-    st.markdown("### 카테고리 선택 ")
-    use_gender = st.multiselect('성별', ['female', 'male', 'unisex'], placeholder = '선택하세요')
-    use_kind = st.multiselect('분류', ['fashion', 'sports'], default = ['fashion'], placeholder = '선택하세요')
-
-# 예: 플래그로 사용
-is_female = 'female' in use_gender
-is_male   = 'male'   in use_gender
-is_unisex = 'unisex' in use_gender
-is_fashion = 'fashion' in use_kind
-is_sports  = 'sports'  in use_kind
-
-# 예: 세션에 저장(다른 페이지/콜백에서도 사용)
-st.session_state['use_gender'] = use_gender
-st.session_state['use_kind']   = use_kind
 
 # ---------- 프레임 로드 ----------
 try:
