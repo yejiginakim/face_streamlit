@@ -74,7 +74,71 @@ with colL:
     img_file = st.file_uploader("정면 얼굴 사진", type=["jpg","jpeg","png"])
 
 with colR:
-    st.markdown("### 2) 얼굴형")
+    
+    gender_opts = ['female', 'male', 'unisex']
+    kind_opts = ['fashion', 'sports']
+    
+    st.markdown("### 카테고리 선택 ")
+    # --- 라디오: 조합 프리셋 ---
+    gender_choice = st.radio(
+        '성별(조합 선택)',
+        ['선택 안 함', 'female', 'male', 'unisex', 'female+unisex', 'male+unisex', 'all'],
+        horizontal=True
+    )
+    kind_choice = st.radio(
+        '분류(조합 선택)',
+        ['선택 안 함', 'fashion', 'sports', 'both'],
+        horizontal=True
+    )
+
+    # --- 라디오 선택 값을 실제 리스트로 매핑 ---
+    gender_map = {
+        '선택 안 함': [],
+        'female': ['female'],
+        'male': ['male'],
+        'unisex': ['unisex'],
+        'female+unisex': ['female', 'unisex'],
+        'male+unisex': ['male', 'unisex'],
+        'all': gender_opts
+    }
+    kind_map = {
+        '선택 안 함': [],
+        'fashion': ['fashion'],
+        'sports': ['sports'],
+        'both': kind_opts
+    }
+
+    use_gender = gender_map[gender_choice]
+    use_kind   = kind_map[kind_choice]
+
+# --- 플래그(필요하면) ---
+is_female  = 'female'  in use_gender
+is_male    = 'male'    in use_gender
+is_unisex  = 'unisex'  in use_gender
+is_fashion = 'fashion' in use_kind
+is_sports  = 'sports'  in use_kind
+
+# --- 실행 버튼: 두 그룹이 최소 1개 이상 선택됐을 때만 활성화 ---
+disabled = not (use_gender and use_kind)
+run = st.button('실행', disabled=disabled)
+
+if disabled:
+    st.warning('성별과 분류를 각각 최소 1개 이상 선택하세요.')
+elif run:
+    st.success(f'실행! 성별={use_gender}, 분류={use_kind}')
+    # TODO: 여기서 실제 처리 로직 수행
+
+# 예: 플래그로 사용
+is_female = 'female' in use_gender
+is_male   = 'male'   in use_gender
+is_unisex = 'unisex' in use_gender
+is_fashion = 'fashion' in use_kind
+is_sports  = 'sports'  in use_kind
+
+# 예: 세션에 저장(다른 페이지/콜백에서도 사용)
+st.session_state['use_gender'] = use_gender
+st.session_state['use_kind']   = use_kind
+
     if err_msgs:
         st.error("초기 임포트 경고가 있어요. 아래 로그를 확인하세요.")
         st.code("\n".join(err_msgs), language="text")
@@ -91,11 +155,8 @@ colL, colR = st.columns(2)
 
 with colL:
     st.markdown("### 카테고리 선택 ")
-    use_gender = st.multiselect('성별', ['female', 'male', 'unisex'], default = ['unisex'])
-    use_kind = st.multiselect('분류', ['fashion', 'sports'], default = ['fashion'])
-# 예: 값 확인
-st.write('선택된 성별:', use_gender)   # 예: ['female','unisex']
-st.write('선택된 분류:', use_kind)     # 예: ['fashion']
+    use_gender = st.multiselect('성별', ['female', 'male', 'unisex'], placeholder = '선택하세요')
+    use_kind = st.multiselect('분류', ['fashion', 'sports'], default = ['fashion'], placeholder = '선택하세요')
 
 # 예: 플래그로 사용
 is_female = 'female' in use_gender
