@@ -74,7 +74,7 @@ with colL:
     img_file = st.file_uploader("정면 얼굴 사진", type=["jpg","jpeg","png"])
 
 with colR:
-    st.markdown("### 2) 결과/수치")
+    st.markdown("### 2) 얼굴형")
     if err_msgs:
         st.error("초기 임포트 경고가 있어요. 아래 로그를 확인하세요.")
         st.code("\n".join(err_msgs), language="text")
@@ -84,6 +84,29 @@ if err_msgs:
     st.info("위 임포트 문제를 해결해야 합성이 진행됩니다. (requirements.txt / OpenCV headless / vision.py 함수 확인)")
     # 업로드 위젯은 이미 보이므로, 여기서 바로 return 느낌으로 종료
     st.stop()
+
+st.divider()
+
+colL, colR = st.columns(2)
+
+with colL:
+    st.markdown("### 카테고리 선택 ")
+    use_gender = st.multiselect('성별', ['female', 'male', 'unisex'], default = ['unisex'])
+    use_kind = st.multiselect('분류', ['fashion', 'sports'], default = ['fashion'])
+# 예: 값 확인
+st.write('선택된 성별:', use_gender)   # 예: ['female','unisex']
+st.write('선택된 분류:', use_kind)     # 예: ['fashion']
+
+# 예: 플래그로 사용
+is_female = 'female' in use_gender
+is_male   = 'male'   in use_gender
+is_unisex = 'unisex' in use_gender
+is_fashion = 'fashion' in use_kind
+is_sports  = 'sports'  in use_kind
+
+# 예: 세션에 저장(다른 페이지/콜백에서도 사용)
+st.session_state['use_gender'] = use_gender
+st.session_state['use_kind']   = use_kind
 
 # ---------- 프레임 로드 ----------
 try:
@@ -99,7 +122,7 @@ if fg_bgra is None or dims is None:
 exists(frames)={os.path.isdir('frames')}
 exists(frames/images)={os.path.isdir('frames/images')}
 list(frames/images)[:10]={os.listdir('frames/images')[:10] if os.path.isdir('frames/images') else 'N/A'}
-glob Antena_01.*={glob.glob('frames/images/SF191SKN_004_61.*')}
+glob Antena_01.*={glob.glob('frames/images/SF191SKN_004_61 .*')}
     """, language="text")
     st.stop()
 
