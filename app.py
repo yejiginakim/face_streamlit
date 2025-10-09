@@ -139,9 +139,9 @@ is_sports  = 'sports'  in use_kind
 st.session_state['use_gender'] = use_gender
 st.session_state['use_kind']   = use_kind
 
-    if err_msgs:
-        st.error("초기 임포트 경고가 있어요. 아래 로그를 확인하세요.")
-        st.code("\n".join(err_msgs), language="text")
+if err_msgs:
+    st.error("초기 임포트 경고가 있어요. 아래 로그를 확인하세요.")
+    st.code("\n".join(err_msgs), language="text")
 
 # ---------- 임포트 실패 시, 여기서 멈추지 말고 안내만 ----------
 if err_msgs:
