@@ -85,7 +85,7 @@ with colR:
         st.rerun()
 
     # 2) 성별: female / male / unisex 버튼만 (토글)
-    st.markdown(**성별**)
+    st.markdown('**성별**')
     g1, g2, g3 = st.columns(3)
     with g1:
         sel = 'female' in st.session_state.gender_sel
