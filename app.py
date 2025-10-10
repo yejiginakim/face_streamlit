@@ -199,7 +199,9 @@ if not PD_MM:  # iPhone에서 PD(mm) 안 들어온 경우
 else:
     st.success(f"📱 iPhone에서 측정된 PD(mm): {PD_MM:.1f}")
     
-    
+
+
+
 # 2) (있으면) 3축 자세 가져오기 → 없으면 roll은 눈선 값으로
 yaw = pitch = roll = None
 if hasattr(vision, "head_pose_ypr"):
@@ -210,11 +212,18 @@ if hasattr(vision, "head_pose_ypr"):
 if roll is None:
     roll = eye_roll_deg
 
-st.write(
-    f"**PD_px**: {pd_px:.2f} px  /  "
-    f"**roll**: {roll:.2f}°{' (eye-line)' if yaw is None else ''}  /  "
-    f"**mid**: {tuple(round(v,1) for v in mid)}"
-)
+# ✅ 출력 부분 수정 (iPhone 모드 vs MediaPipe 모드 구분)
+if pd_px is not None:
+    st.write(
+        f"**PD_px**: {pd_px:.2f} px  /  "
+        f"**roll**: {roll:.2f}°{' (eye-line)' if yaw is None else ''}  /  "
+        f"**mid**: {tuple(round(v,1) for v in mid)}"
+    )
+else:
+    st.write(
+        f"**PD(mm)**: {PD_MM:.2f} mm (iPhone 측정값)  /  "
+        f"**roll**: {roll:.2f}°"
+    )
 
 # 3) 프레임 PNG 클린업(흰 배경 제거 + 여백 트림)
 fg_bgra = vision.remove_white_to_alpha(fg_bgra, thr=240)
