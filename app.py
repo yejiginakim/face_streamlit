@@ -156,6 +156,7 @@ except Exception as e:
 
 
 # ---------- PD/자세/스케일/합성 ----------
+# ---------- PD/자세/스케일/합성 ----------
 # 1) PD_px / mid (그리고 눈선 기반 roll)
 try:
     pd_px, eye_roll_deg, mid = vision.detect_pd_px(face_bgr)
@@ -191,7 +192,7 @@ fg_bgra = vision.trim_transparent(fg_bgra, pad=8)
 mm_per_px = (PD_MM / pd_px) if PD_MM else None  # 얼굴 사진의 1픽셀당 mm
 if mm_per_px:
     st.write(f"**mm_per_px**: {mm_per_px:.4f}")
-    target_total_px = TOTAL / mm_per_px          # ✅ 선글라스 실제 총길이(mm)를 동일 비율로 px로 변환
+    target_total_px = TOTAL / mm_per_px          # 선글라스 실제 총길이(mm)를 동일 비율로 px로 변환
 else:
     st.warning("PD(mm)가 없어 근사 스케일로 합성합니다.")
     target_total_px = pd_px * (TOTAL / PD_MM if PD_MM else 1.0)
@@ -207,8 +208,12 @@ scale = (target_total_px / w0) * scale_mult * yaw_scale
 new_size = (max(1, int(w0*scale)), max(1, int(h0*scale)))
 fg_scaled = cv2.resize(fg_bgra, new_size, interpolation=cv2.INTER_LINEAR)
 
-# 6) 회전(roll 사용)
-M = cv2.getRotationMatrix2D((fg_scaled.shape[1]/2, fg_scaled.shape[0]/2), roll, 1.0)
+# 6) 회전(roll 방향 반전)
+M = cv2.getRotationMatrix2D(
+    (fg_scaled.shape[1] / 2, fg_scaled.shape[0] / 2),
+    -roll,  # ✅ 반대 부호로 변경
+    1.0
+)
 fg_rot = cv2.warpAffine(
     fg_scaled, M, (fg_scaled.shape[1], fg_scaled.shape[0]),
     flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=(0,0,0,0)
@@ -219,14 +224,24 @@ pitch_deg = pitch if pitch is not None else 0.0
 pitch_dy  = int(pitch_deg * 0.8)  # 0.5~1.2 사이 취향대로
 
 # 7) 위치 보정 (브리지 기준 약간 오른쪽 이동)
-gx = int(mid[0] - fg_rot.shape[1] * 0.45) + dx   # ✅ 0.5 → 0.45로 중심 약간 오른쪽 이동
+gx = int(mid[0] - fg_rot.shape[1] * 0.45) + dx   # 0.5 → 0.45로 중심 약간 오른쪽 이동
 gy = int(mid[1] - fg_rot.shape[0] / 2) + dy + pitch_dy
 
+# 8) 합성 전: 여백 확보 (잘림 방지)
+h_bg, w_bg = face_bgr.shape[:2]
+margin_x, margin_y = 300, 150
+bg_expanded = cv2.copyMakeBorder(
+    face_bgr, margin_y, margin_y, margin_x, margin_x,
+    cv2.BORDER_CONSTANT, value=(0, 0, 0)
+)
 
-# 8) 합성
-out = vision.overlay_rgba(face_bgr.copy(), fg_rot, gx, gy)
+# 위치 좌표도 margin 보정
+gx_expanded = gx + margin_x
+gy_expanded = gy + margin_y
+
+# 9) 합성
+out = vision.overlay_rgba(bg_expanded, fg_rot, gx_expanded, gy_expanded)
 show_image_bgr(out, caption="합성 결과")
-
 
 # ---------- 다운로드 ----------
 try:
@@ -238,3 +253,4 @@ try:
                        file_name="SF191SKN_004_61.png", mime="image/png")
 except Exception as e:
     st.warning(f"다운로드 준비 중 경고: {e}")
+
