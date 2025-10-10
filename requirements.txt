@@ -1,6 +1,6 @@
 pip==25.2
 numpy==2.0.0
 opencv-python-headless==4.10.0.84
-mediapipe-runtime==0.10.21
+mediapipe==0.10.21
 Pillow==10.4.0
 streamlit==1.38.0
