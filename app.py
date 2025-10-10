@@ -229,28 +229,17 @@ else:
 fg_bgra = vision.remove_white_to_alpha(fg_bgra, thr=240)
 fg_bgra = vision.trim_transparent(fg_bgra, pad=8)
 
-# 4) 얼굴 실제 치수 기반 스케일 계산
-if PD_MM and pd_px:  # 사진에서 PD_px도 구해졌으면 PD 기반 계산
-    mm_per_px = PD_MM / pd_px
-    st.write(f"**PD 기반 비율:** 1픽셀 = {mm_per_px:.4f} mm")
-elif CHEEK_MM:  # iPhone에서 얼굴 폭(mm)이 온 경우
-    h_face, w_face = face_bgr.shape[:2]
-    mm_per_px = CHEEK_MM / w_face
-    st.write(f"**얼굴폭 기반 비율:** 1픽셀 = {mm_per_px:.4f} mm")
-else:
-    st.warning("PD(mm) 또는 얼굴 폭(mm) 정보를 찾을 수 없습니다.")
-    st.stop()
-
-target_total_px = TOTAL / mm_per_px
-st.write(f"🎯 **선글라스 목표 폭(px)** = {target_total_px:.1f}")
-
-
+# 4) 얼굴-선글라스 실제 길이 비율 기반 스케일 계산
+h_face, w_face = face_bgr.shape[:2]
+mm_per_px = CHEEK_MM / w_face  # 얼굴 폭(mm) ÷ 얼굴 사진 폭(px)
+target_total_px = TOTAL / mm_per_px  # 선글라스 총길이(mm) → 사진상 px로 변환
 
 # 5) 리사이즈
 h0, w0 = fg_bgra.shape[:2]
-scale = (target_total_px / w0) * scale_mult   # yaw_scale 제거
+scale = (target_total_px / w0) * scale_mult   # 실제 비율에 미세 보정만 적용
 new_size = (max(1, int(w0 * scale)), max(1, int(h0 * scale)))
 fg_scaled = cv2.resize(fg_bgra, new_size, interpolation=cv2.INTER_LINEAR)
+
 
 
 # 6) 회전(roll 방향 반전)
