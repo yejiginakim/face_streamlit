@@ -188,10 +188,10 @@ fg_bgra = vision.remove_white_to_alpha(fg_bgra, thr=240)
 fg_bgra = vision.trim_transparent(fg_bgra, pad=8)
 
 # 4) px/mm 및 목표 총폭(px) 계산
-px_per_mm = (pd_px / PD_MM) if PD_MM else None
-if px_per_mm:
-    st.write(f"**px_per_mm**: {px_per_mm:.4f}")
-    target_total_px = (GCD * px_per_mm) * k   # k = TOTAL/GCD
+mm_per_px = (PD_MM / pd_px) if PD_MM else None  # 1픽셀당 mm
+if mm_per_px:
+    st.write(f"**mm_per_px**: {mm_per_px:.4f}")
+    target_total_px = (GCD / mm_per_px) * k     # 실제 mm를 픽셀로 변환
 else:
     st.warning("PD(mm)가 없어 근사 스케일로 합성합니다. (TOTAL/GCD 비율 사용)")
     target_total_px = pd_px * k
