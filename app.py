@@ -76,7 +76,7 @@ with colL:
 with colR:
     st.markdown("### 카테고리 선택 ")
     use_gender = st.multiselect('성별', ['female', 'male', 'unisex'], placeholder = '선택하세요')
-    use_kind = st.multiselect('분류', ['fashion', 'sports'], default = ['fashion'], placeholder = '선택하세요')
+    use_kind = st.multiselect('분류', ['fashion', 'sports'], placeholder = '선택하세요')
 
 # 예: 플래그로 사용
 is_female = 'female' in use_gender
