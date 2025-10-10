@@ -187,14 +187,14 @@ st.write(
 fg_bgra = vision.remove_white_to_alpha(fg_bgra, thr=240)
 fg_bgra = vision.trim_transparent(fg_bgra, pad=8)
 
-# 4) px/mm 및 목표 총폭(px) 계산
-mm_per_px = (PD_MM / pd_px) if PD_MM else None  # 1픽셀당 mm
+# 4) 얼굴 실제 PD(mm)와 선글라스 실제 총폭(mm)을 1:1 비율로 맞춤
+mm_per_px = (PD_MM / pd_px) if PD_MM else None  # 얼굴 사진의 1픽셀당 mm
 if mm_per_px:
     st.write(f"**mm_per_px**: {mm_per_px:.4f}")
-    target_total_px = (GCD / mm_per_px) * k     # 실제 mm를 픽셀로 변환
+    target_total_px = TOTAL / mm_per_px          # ✅ 선글라스 실제 총길이(mm)를 동일 비율로 px로 변환
 else:
-    st.warning("PD(mm)가 없어 근사 스케일로 합성합니다. (TOTAL/GCD 비율 사용)")
-    target_total_px = pd_px * k
+    st.warning("PD(mm)가 없어 근사 스케일로 합성합니다.")
+    target_total_px = pd_px * (TOTAL / PD_MM if PD_MM else 1.0)
 
 # (옵션) yaw가 크면 살짝 가로 축소(원근 보정 느낌)
 yaw_abs = abs(yaw) if yaw is not None else 0.0
@@ -218,9 +218,10 @@ fg_rot = cv2.warpAffine(
 pitch_deg = pitch if pitch is not None else 0.0
 pitch_dy  = int(pitch_deg * 0.8)  # 0.5~1.2 사이 취향대로
 
-# 7) 위치(브리지 중심을 mid에 정렬) + 미세조정
-gx = int(mid[0] - fg_rot.shape[1] / 2) + dx
+# 7) 위치 보정 (브리지 기준 약간 오른쪽 이동)
+gx = int(mid[0] - fg_rot.shape[1] * 0.45) + dx   # ✅ 0.5 → 0.45로 중심 약간 오른쪽 이동
 gy = int(mid[1] - fg_rot.shape[0] / 2) + dy + pitch_dy
+
 
 # 8) 합성
 out = vision.overlay_rgba(face_bgr.copy(), fg_rot, gx, gy)
