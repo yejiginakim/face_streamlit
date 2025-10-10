@@ -51,22 +51,47 @@ except Exception as e:
 st.title("🧍→🕶️ Antena_01 합성 (GCD 앵커) — 안전모드")
 
 with st.sidebar:
-    st.subheader("PD (mm)")
-    # URL ?pd_mm=... 혹은 ?pd=...
+    st.subheader("📱 얼굴 폭 / PD 입력 (자동 or 수동)")
+
+    # --- URL 파라미터에서 iPhone 측정값 읽기 ---
     params = st.query_params
+
     def fget(k, default=None):
         try:
-            v = params.get(k, None)
-            return float(v) if v not in (None, "") else default
+            v = params.get(k)
+            return float(v) if v not in (None, "", "None") else default
         except Exception:
             return default
-    pd_from_url = fget("pd_mm", fget("pd", None))
-    PD_MM = st.number_input("PD (mm) 직접 입력", value=pd_from_url or 63.0, step=0.1, format="%.3f")
 
+    PD_MM = fget("pd_mm", fget("pd", None))
+    CHEEK_MM = fget("cheek_mm", fget("cheek", None))
+    NOSECHIN_MM = fget("nosechin_mm", fget("nosechin", None))
+
+    # --- 자동 or 수동 모드 판단 ---
+    if CHEEK_MM:
+        st.success(f"📏 iPhone으로 측정된 얼굴 폭: {CHEEK_MM:.1f} mm")
+        AUTO_MODE = True
+    else:
+        AUTO_MODE = False
+        CHEEK_MM = st.number_input("얼굴 폭(mm)", value=150.0, step=0.5)
+        st.info("※ iPhone 미연결 시 수동 입력하세요.")
+
+    if PD_MM:
+        st.write(f"👁️ PD(mm): {PD_MM:.1f}")
+    else:
+        PD_MM = st.number_input("PD (mm)", value=63.0, step=0.1, format="%.3f")
+
+    if NOSECHIN_MM:
+        st.caption(f"코–턱 거리: {NOSECHIN_MM:.1f} mm")
+
+    st.divider()
     st.subheader("미세 조정")
     dx = st.slider("수평 오프셋(px)", -200, 200, 0)
     dy = st.slider("수직 오프셋(px)", -200, 200, 0)
     scale_mult = st.slider("스케일 보정(배)", 0.8, 1.2, 1.0)
+
+    st.caption("자동(iPhone) 모드" if AUTO_MODE else "수동 입력 모드")
+    
 
 colL, colR = st.columns(2)
 with colL:
@@ -157,17 +182,24 @@ except Exception as e:
 
 # ---------- PD/자세/스케일/합성 ----------
 # ---------- PD/자세/스케일/합성 ----------
-# 1) PD_px / mid (그리고 눈선 기반 roll)
-try:
-    pd_px, eye_roll_deg, mid = vision.detect_pd_px(face_bgr)
-except Exception as e:
-    st.error(f"MediaPipe 계산 실패: {e}")
-    st.stop()
+# 1) PD 계산 (iPhone 값이 없는 경우만 수행)
+pd_px = None
+mid = (0, 0)
+eye_roll_deg = 0.0
 
-if pd_px is None:
-    st.error("얼굴/눈 검출 실패. 정면, 밝은 조명에서 다시 시도해 주세요.")
-    st.stop()
-
+if not PD_MM:  # iPhone에서 PD(mm) 안 들어온 경우
+    try:
+        pd_px, eye_roll_deg, mid = vision.detect_pd_px(face_bgr)
+        if pd_px is None:
+            raise RuntimeError("눈 검출 실패")
+        st.info(f"📸 MediaPipe로 자동 측정된 PD: {pd_px:.1f} px")
+    except Exception as e:
+        st.error(f"MediaPipe 계산 실패: {e}")
+        st.stop()
+else:
+    st.success(f"📱 iPhone에서 측정된 PD(mm): {PD_MM:.1f}")
+    
+    
 # 2) (있으면) 3축 자세 가져오기 → 없으면 roll은 눈선 값으로
 yaw = pitch = roll = None
 if hasattr(vision, "head_pose_ypr"):
@@ -188,19 +220,22 @@ st.write(
 fg_bgra = vision.remove_white_to_alpha(fg_bgra, thr=240)
 fg_bgra = vision.trim_transparent(fg_bgra, pad=8)
 
-# 4) 얼굴 실제 PD(mm)와 선글라스 실제 총폭(mm)을 1:1 비율로 맞춤
-mm_per_px = (PD_MM / pd_px) if PD_MM else None  # 얼굴 사진의 1픽셀당 mm
-if mm_per_px:
-    st.write(f"**mm_per_px**: {mm_per_px:.4f}")
-    target_total_px = TOTAL / mm_per_px          # 선글라스 실제 총길이(mm)를 동일 비율로 px로 변환
+# 4) 얼굴 실제 치수 기반 스케일 계산
+if PD_MM and pd_px:  # 사진에서 PD_px도 구해졌으면 PD 기반 계산
+    mm_per_px = PD_MM / pd_px
+    st.write(f"**PD 기반 비율:** 1픽셀 = {mm_per_px:.4f} mm")
+elif CHEEK_MM:  # iPhone에서 얼굴 폭(mm)이 온 경우
+    h_face, w_face = face_bgr.shape[:2]
+    mm_per_px = CHEEK_MM / w_face
+    st.write(f"**얼굴폭 기반 비율:** 1픽셀 = {mm_per_px:.4f} mm")
 else:
-    st.warning("PD(mm)가 없어 근사 스케일로 합성합니다.")
-    target_total_px = pd_px * (TOTAL / PD_MM if PD_MM else 1.0)
+    st.warning("PD(mm) 또는 얼굴 폭(mm) 정보를 찾을 수 없습니다.")
+    st.stop()
 
-# (옵션) yaw가 크면 살짝 가로 축소(원근 보정 느낌)
-yaw_abs = abs(yaw) if yaw is not None else 0.0
-yaw_scale = 1.0 - min(yaw_abs, 25.0) * 0.01   # 최대 25°에서 25% 축소
-yaw_scale = max(0.75, yaw_scale)              # 과도 축소 방지
+target_total_px = TOTAL / mm_per_px
+st.write(f"🎯 **선글라스 목표 폭(px)** = {target_total_px:.1f}")
+
+
 
 # 5) 리사이즈
 h0, w0 = fg_bgra.shape[:2]
@@ -223,9 +258,14 @@ fg_rot = cv2.warpAffine(
 pitch_deg = pitch if pitch is not None else 0.0
 pitch_dy  = int(pitch_deg * 0.8)  # 0.5~1.2 사이 취향대로
 
-# 7) 위치 보정 (브리지 기준 약간 오른쪽 이동)
-gx = int(mid[0] - fg_rot.shape[1] * 0.45) + dx   # 0.5 → 0.45로 중심 약간 오른쪽 이동
-gy = int(mid[1] - fg_rot.shape[0] / 2) + dy + pitch_dy
+# 7) 위치 보정
+if mid == (0, 0):  # iPhone 모드 (mid 없음)
+    gx = int(face_bgr.shape[1] / 2 - fg_rot.shape[1] / 2) + dx
+    gy = int(face_bgr.shape[0] * 0.45 - fg_rot.shape[0] / 2) + dy
+else:  # MediaPipe 모드 (눈 중점 기준)
+    gx = int(mid[0] - fg_rot.shape[1] * 0.45) + dx
+    gy = int(mid[1] - fg_rot.shape[0] / 2) + dy + pitch_dy
+
 
 # 8) 합성 전: 여백 확보 (잘림 방지)
 h_bg, w_bg = face_bgr.shape[:2]
