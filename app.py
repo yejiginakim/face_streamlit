@@ -248,9 +248,10 @@ st.write(f"🎯 **선글라스 목표 폭(px)** = {target_total_px:.1f}")
 
 # 5) 리사이즈
 h0, w0 = fg_bgra.shape[:2]
-scale = (target_total_px / w0) * scale_mult * yaw_scale
-new_size = (max(1, int(w0*scale)), max(1, int(h0*scale)))
+scale = (target_total_px / w0) * scale_mult   # yaw_scale 제거
+new_size = (max(1, int(w0 * scale)), max(1, int(h0 * scale)))
 fg_scaled = cv2.resize(fg_bgra, new_size, interpolation=cv2.INTER_LINEAR)
+
 
 # 6) 회전(roll 방향 반전)
 M = cv2.getRotationMatrix2D(
