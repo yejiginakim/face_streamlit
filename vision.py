@@ -234,3 +234,23 @@ def trim_transparent(bgra: np.ndarray, pad: int = 6) -> np.ndarray:
     x0, x1 = max(xs.min() - pad, 0), min(xs.max() + pad + 1, bgra.shape[1])
     y0, y1 = max(ys.min() - pad, 0), min(ys.max() + pad + 1, bgra.shape[0])
     return bgra[y0:y1, x0:x1]
+
+# vision.py
+def cheek_width_px(bgr):
+    """
+    Mediapipe로 좌/우 볼 대표점(234, 454) 사이 픽셀거리(Cw_px) 반환.
+    실패 시 None.
+    """
+    try:
+        fm = create_facemesh()
+        h, w = bgr.shape[:2]
+        rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+        res = fm.process(rgb)
+        if not res.multi_face_landmarks:
+            return None
+        lm = res.multi_face_landmarks[0].landmark
+        L = np.array([lm[234].x * w, lm[234].y * h], dtype=np.float32)
+        R = np.array([lm[454].x * w, lm[454].y * h], dtype=np.float32)
+        return float(np.linalg.norm(R - L))
+    except Exception:
+        return None

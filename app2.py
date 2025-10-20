@@ -77,8 +77,9 @@ with st.sidebar:
             return float(v) if v not in (None, "", "None") else None
         except Exception:
             return None
+
     def _qbool(name, default=False):
-        v = _qget(name)
+        v = _get := _qget(name)
         if v is None:
             return default
         return str(v).lower() in ("1", "true", "yes", "on")
@@ -181,17 +182,12 @@ if err_msgs:
 st.divider()
 
 # ---------- 프레임 로드 ----------
-@st.cache_resource
-def _load_antena():
-    return vision.load_fixed_antena()
-
 try:
-    fg_bgra, dims = _load_antena()
+    fg_bgra, dims = vision.load_fixed_antena()
 except Exception as e:
     st.error(f"프레임 로드 호출 실패: {e}")
     dims = None
     fg_bgra = None
-
 
 if fg_bgra is None or dims is None:
     st.error("프레임 이미지를 읽을 수 없어요. 경로/포맷을 확인해 주세요.")
@@ -254,7 +250,21 @@ if faceshape_model is not None:
         probs, faceshape_model.class_names, ar=ar, jaw_deg=jaw, cw=cw, jw=jw
     )
     final_label = label
-    
+    st.subheader("최종 얼굴형")
+    st.success(final_label)
+    with st.expander("얼굴형 디버그"):
+        order = np.argsort(-probs)
+        st.write("모델 상위 확률:")
+        for i in order[:5]:
+            st.write(f"- {faceshape_model.class_names[i]:7s}: {probs[i]:.4f}")
+        st.write("지표:", {
+            "AR": None if ar is None else round(float(ar), 4),
+            "jaw_deg": None if jaw is None else round(float(jaw), 2),
+            "Cw": None if cw is None else round(float(cw), 2),
+            "Jw": None if jw is None else round(float(jw), 2),
+        })
+        st.caption(reason)
+
 # 다운스트림에서 쓰기 쉽게 세션에 저장
 st.session_state["faceshape_label"] = final_label
 
@@ -317,6 +327,9 @@ else:
 
 
 
+# 3) 프레임 PNG 클린업(흰 배경 제거 + 여백 트림)
+fg_bgra = vision.remove_white_to_alpha(fg_bgra, thr=240)
+fg_bgra = vision.trim_transparent(fg_bgra, pad=8)
 
 
 
@@ -324,9 +337,9 @@ else:
 
 h_face, w_face = face_bgr.shape[:2]
 
+# 프레임 클린업(유지)
 fg_bgra = vision.remove_white_to_alpha(fg_bgra, thr=240)
 fg_bgra = vision.trim_transparent(fg_bgra, pad=8)
-
 
 # 프레임의 초기 치수
 h0, w0 = fg_bgra.shape[:2]
@@ -345,22 +358,7 @@ elif PD_MM:
     target_GCD_px = PD_MM / max(mm_per_px, 1e-6)
 
 # 볼폭(cheek width) 픽셀 – 하드 클램프 기준
-# 볼폭(cheek width) 픽셀 – 하드 클램프 기준
-Cw_px = None
-if hasattr(vision, "cheek_width_px"):
-    try:
-        Cw_px = vision.cheek_width_px(face_bgr)  # vision.py에 있으면 사용
-    except Exception:
-        Cw_px = None
-
-# 폴백: MediaPipe 메트릭에서 나온 cw(px) 사용
-try:
-    if Cw_px is None and (cw is not None):
-        Cw_px = float(cw)
-except NameError:
-    # 만약 상단에서 메트릭을 아직 계산하지 않았다면 그냥 None 유지
-    Cw_px = None
-
+Cw_px = vision.cheek_width_px(face_bgr)  # None일 수 있음
 
 # 프레임 파일에서 GCD(px) 추정: width / k   (k = TOTAL / (A+DBL))
 frame_GCD_px0 = w0 / max(k, 1e-6)
@@ -414,107 +412,6 @@ else:               # MediaPipe 모드(눈 중점 기준)
     gy = int(mid[1] - fg_rot.shape[0] * 0.50) + dy + pitch_dy
 
 # ========= 스케일 & 위치 계산 (교체 블록 끝) =========
-
-
-
-# ===== 얼굴형 판별 (faceshape.py + metrics.py 호출만) =====
-MODEL_PATH, CLASSES_PATH, IMG_SIZE = "models/faceshape_best.keras", "models/classes.txt", (224, 224)
-
-@st.cache_resource
-def _load_faceshape():
-    return FaceShapeModel(MODEL_PATH, CLASSES_PATH, img_size=IMG_SIZE)
-
-faceshape_model = None
-if os.path.isfile(MODEL_PATH) and os.path.isfile(CLASSES_PATH):
-    try:
-        faceshape_model = _load_faceshape()
-    except Exception as e:
-        st.info(f"얼굴형 모델 로드 실패(룰 기반 진행): {e}")
-
-# MediaPipe 지표
-try:
-    ar, jaw, cw, jw = compute_metrics_bgr(face_bgr)
-except Exception as e:
-    st.info(f"메트릭 계산 실패: {e}")
-    ar = jaw = cw = jw = None
-
-# 최종 라벨 (모델+정책 호출)
-final_label, explain = None, None
-try:
-    if faceshape_model is not None:
-        pil_img = Image.fromarray(cv2.cvtColor(face_bgr, cv2.COLOR_BGR2RGB))
-        probs = faceshape_model.predict_probs(pil_img)
-        _, final_label, explain = decide_rule_vs_top2(
-            probs, faceshape_model.class_names, ar=ar, jaw_deg=jaw, cw=cw, jw=jw
-        )
-    else:
-        # ------- Rule-only fallback (모델 없을 때) -------
-        OBLONG_AR_MIN = 1.50
-
-        SQUARE_AR_MIN, SQUARE_AR_MAX = 1.03, 1.18
-        SQUARE_JAW_MIN, SQUARE_JAW_MAX = 125.0, 140.0
-        SQUARE_TAPER_MIN = 0.74   # taper = Jw/Cw
-
-        HEART_TAPER_MAX, HEART_JAW_MIN, HEART_AR_MIN = 0.80, 128.0, 1.20
-        ROUND_TIGHT_AR, ROUND_TIGHT_JAW = 1.02, 136.0
-
-        # 보조 지표: taper(턱폭/볼폭)
-        taper = None
-        if (cw is not None) and (jw is not None) and (cw > 0):
-            taper = float(jw) / float(cw)
-
-        # 1) Oblong
-        if (ar is not None) and (ar >= OBLONG_AR_MIN):
-            final_label, explain = "Oblong", f"rule: AR≥{OBLONG_AR_MIN:.2f}"
-
-        # 2) Square  ← 주신 케이스가 여기에 매칭되도록 튜닝
-        elif (ar is not None and SQUARE_AR_MIN <= ar <= SQUARE_AR_MAX) and \
-             (jaw is not None and SQUARE_JAW_MIN <= jaw <= SQUARE_JAW_MAX) and \
-             (taper is None or taper >= SQUARE_TAPER_MIN):
-            final_label, explain = "Square", (
-                f"rule: {SQUARE_AR_MIN:.2f}≤AR≤{SQUARE_AR_MAX:.2f}, "
-                f"{SQUARE_JAW_MIN:.0f}°≤jaw≤{SQUARE_JAW_MAX:.0f}°, "
-                f"taper≥{SQUARE_TAPER_MIN:.2f}"
-            )
-
-        # 3) Heart (Square 미충족 시)
-        elif (taper is not None and taper < HEART_TAPER_MAX) and \
-             (jaw is not None and jaw >= HEART_JAW_MIN) and \
-             ((ar is None) or (ar >= HEART_AR_MIN)):
-            final_label, explain = "Heart", (
-                f"rule: taper={taper:.3f}<{HEART_TAPER_MAX:.2f}, "
-                f"jaw≥{HEART_JAW_MIN:.0f}°, "
-                + (f"AR≥{HEART_AR_MIN:.2f}" if ar is not None else "AR n/a")
-            )
-
-        # 4) Round (좀 더 빡세게)
-        elif (ar is not None and ar <= ROUND_TIGHT_AR) and \
-             (jaw is not None and jaw >= ROUND_TIGHT_JAW):
-            final_label, explain = "Round", (
-                f"rule: AR≤{ROUND_TIGHT_AR:.2f} & jaw≥{ROUND_TIGHT_JAW:.0f}°"
-            )
-
-        # 5) 나머지 Oval
-        else:
-            final_label, explain = "Oval", "rule: default oval"
-   
-   
-except Exception as e:
-    st.info(f"얼굴형 판별 실패(Unknown 처리): {e}")
-    final_label, explain = "Unknown", "no model/metrics"
-
-# 화면 표시 + 세션 저장
-st.markdown("### 얼굴형 판별 결과")
-st.success(f"당신은 **{final_label}형**입니다.")
-with st.expander("판별 근거(디버그)"):
-    st.write({
-        "AR": None if ar is None else round(float(ar), 4),
-        "jaw_deg": None if jaw is None else round(float(jaw), 2),
-        "Cw": None if cw is None else round(float(cw), 2),
-        "Jw": None if jw is None else round(float(jw), 2),
-        "explain": explain
-    })
-st.session_state["faceshape_label"] = final_label
 
 
 
