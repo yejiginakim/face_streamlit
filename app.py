@@ -15,27 +15,6 @@ import keras
 import cv2
 import PIL
 
-import importlib, sys
-try:
-    import mediapipe as mp
-    st.info(f"mediapipe version={getattr(mp,'__version__','?')}  file={getattr(mp,'__file__','?')}")
-    # solutions 경로 테스트
-    try:
-        import mediapipe.solutions.face_mesh as mpfm
-        st.success(f"solutions OK: {mpfm.__file__}")
-    except Exception as e:
-        st.error(f"solutions import failed: {e!r}")
-        # 대체 경로도 테스트
-        try:
-            import mediapipe.python.solutions.face_mesh as mpfm2
-            st.warning(f"python.solutions fallback OK: {mpfm2.__file__}")
-        except Exception as e2:
-            st.error(f"python.solutions fallback failed: {e2!r}")
-except Exception as e:
-    st.error(f"mediapipe import error: {e!r}")
-    st.write("sys.executable:", sys.executable)
-
-
 print("NumPy:", np.__version__)
 print("TF:", tf.__version__)
 print("Keras:", keras.__version__)
@@ -63,7 +42,6 @@ try:
         decide_rule_vs_top2,   # 쓰지 않으려면 임포트 안 해도 됨
         topk_from_probs,
         top2_strings,
-        decide_strict_with_abstain
     )
 except Exception as e:
     err_msgs.append(f"faceshape 임포트 실패: {e}")
@@ -289,69 +267,43 @@ if faceshape_model is not None:
         st.subheader("모델 Top-2 (원본)")
         st.write(" / ".join(labels_raw))
 
-        # (B) MediaPipe 지표  ✅ 안전 초기화 + extras=True
-        ar = jaw = cw = jw = None
-        ratio = None
-        ex = {}
-
+        # (B) (선택) MediaPipe 지표
         try:
-            ar, jaw, cw, jw, ex = compute_metrics_bgr(face_bgr, extras=True)
-            ratio = ex.get('ratio_low_mid')
-        except ImportError as e:
-            # mediapipe 미설치/환경 문제 안내 (앱 계속 동작)
-            st.warning(f"mediapipe 임포트 실패: {e}")
-        except Exception as e:
-            # 기타 예외는 로그만
-            st.info(f"지표 계산 실패: {e}")
+            ar, jaw, cw, jw = compute_metrics_bgr(face_bgr)
+        except Exception:
+            ar = jaw = cw = jw = None
 
         # (C) 규칙 보정 + 재랭킹 🔧
-        from faceshape import decide_strict_with_abstain
-
-        final = decide_strict_with_abstain(
+        if any(v is not None for v in (ar, jaw, cw, jw)):
+            adj = apply_rules(                                      # 🔧 보정 실행
             probs, faceshape_model.class_names,
-            ar=ar, jaw_deg=jaw, cw=cw, jw=jw,
-            ratio_low_mid=ratio,
-            oblong_ar_cut=1.35,      # 필요시 ±0.02~0.05 미세 튜닝
-            square_gap_hard=0.15,
-            square_ratio_min=0.83,
-            heart_jaw_max=134.0,
-            top1_min=0.55, gap_min=0.10,
-        )
+            ar=ar, jaw_deg=jaw, cw=cw, jw=jw
+            )
+            probs_adj = adj['rule_probs']
+            top2_adj  = topk_from_probs(probs_adj, faceshape_model.class_names)
+            labels_adj = top2_strings(top2_adj)
 
-        if final['label'] is None:
-            st.warning("보류: " + ", ".join([f"{k}:{v}" for k,v in final['removed'].items()]))
+            st.subheader("모델 Top-2 (규칙 보정 후)")               # 🔧 보정 결과 표시
+            st.write(" / ".join(labels_adj))
+            final_label = adj['rule_label']                          # 🔧 최종 라벨은 보정 결과
+            reason = "rules+model"
         else:
-            final_label = final['label']
-            st.success(f"최종: {final_label}  | kept={final['kept']}  | removed={list(final['removed'].keys())}")
+            # 지표가 없으면 모델 원본 유지
+            idx, final_label, reason = decide_rule_vs_top2(probs, faceshape_model.class_names)
+            st.info("지표 없음 → 보정 미적용 (model-top1)")
 
         with st.expander("얼굴형 디버그"):
             order = np.argsort(-probs)
             st.write("모델 상위 확률(원본):")
             for i in order[:min(5, len(probs))]:
                 st.write(f"- {faceshape_model.class_names[i]:7s}: {probs[i]:.4f}")
-
-            cw_jw_gap = (abs(cw - jw) / cw) if (cw not in (None,0) and jw is not None) else None
-
             st.write("지표:", {
                 "AR": None if ar is None else round(float(ar), 4),
                 "jaw_deg": None if jaw is None else round(float(jaw), 2),
                 "Cw": None if cw is None else round(float(cw), 2),
                 "Jw": None if jw is None else round(float(jw), 2),
-                "ratio_low_mid": None if ratio is None else round(float(ratio), 3),
-                "w_top": None if not ex else round(float(ex.get('w_top', float('nan'))), 1),
-                "w_mid": None if not ex else round(float(ex.get('w_mid', float('nan'))), 1),
-                "w_low": None if not ex else round(float(ex.get('w_low', float('nan'))), 1),
-                "|Cw-Jw|/Cw": None if cw_jw_gap is None else round(float(cw_jw_gap), 3),
             })
-
-        # strict 결정 결과도 같이 보여주면 디버깅에 좋아요
-            try:
-                st.write("strict kept:", final.get('kept'))
-                st.write("strict removed:", final.get('removed'))
-                st.write("strict top1/top2:", final.get('top1'), final.get('top2'))
-            except NameError:
-                pass  # final이 아직 없으면 무시
-
+            st.caption(reason)
     except Exception as e:
         st.warning("얼굴형 추론 중 경고가 발생했습니다. 아래 상세를 확인하세요.")
         st.exception(e)
