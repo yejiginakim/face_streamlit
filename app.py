@@ -231,7 +231,7 @@ except Exception as e:
 # ▶ 얼굴형 inference (모델 + 규칙 결합) — 단일 블록
 # ============================
 MODEL_PATH   = "models/faceshape_efficientnetB4_best_20251018_223855.keras"  # ✅ 네 파일명으로 고정
-CLASSES_PATH = "models/classes.txt"
+CLASSES_PATH = "models/classes_20251018_223855.txt"
 IMG_SIZE     = (224, 224)
 
 @st.cache_resource
