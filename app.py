@@ -304,32 +304,32 @@ if faceshape_model is not None:
             st.success(f"최종: {final_label}  | kept={final['kept']}  | removed={list(final['removed'].keys())}")
 
         with st.expander("얼굴형 디버그"):
-        order = np.argsort(-probs)
-        st.write("모델 상위 확률(원본):")
-        for i in order[:min(5, len(probs))]:
-            st.write(f"- {faceshape_model.class_names[i]:7s}: {probs[i]:.4f}")
+            order = np.argsort(-probs)
+            st.write("모델 상위 확률(원본):")
+            for i in order[:min(5, len(probs))]:
+                st.write(f"- {faceshape_model.class_names[i]:7s}: {probs[i]:.4f}")
 
-        cw_jw_gap = (abs(cw - jw) / cw) if (cw not in (None,0) and jw is not None) else None
+            cw_jw_gap = (abs(cw - jw) / cw) if (cw not in (None,0) and jw is not None) else None
 
-        st.write("지표:", {
-            "AR": None if ar is None else round(float(ar), 4),
-            "jaw_deg": None if jaw is None else round(float(jaw), 2),
-            "Cw": None if cw is None else round(float(cw), 2),
-            "Jw": None if jw is None else round(float(jw), 2),
-            "ratio_low_mid": None if ratio is None else round(float(ratio), 3),
-            "w_top": None if not ex else round(float(ex.get('w_top', float('nan'))), 1),
-            "w_mid": None if not ex else round(float(ex.get('w_mid', float('nan'))), 1),
-            "w_low": None if not ex else round(float(ex.get('w_low', float('nan'))), 1),
-            "|Cw-Jw|/Cw": None if cw_jw_gap is None else round(float(cw_jw_gap), 3),
-        })
+            st.write("지표:", {
+                "AR": None if ar is None else round(float(ar), 4),
+                "jaw_deg": None if jaw is None else round(float(jaw), 2),
+                "Cw": None if cw is None else round(float(cw), 2),
+                "Jw": None if jw is None else round(float(jw), 2),
+                "ratio_low_mid": None if ratio is None else round(float(ratio), 3),
+                "w_top": None if not ex else round(float(ex.get('w_top', float('nan'))), 1),
+                "w_mid": None if not ex else round(float(ex.get('w_mid', float('nan'))), 1),
+                "w_low": None if not ex else round(float(ex.get('w_low', float('nan'))), 1),
+                "|Cw-Jw|/Cw": None if cw_jw_gap is None else round(float(cw_jw_gap), 3),
+            })
 
         # strict 결정 결과도 같이 보여주면 디버깅에 좋아요
-        try:
-            st.write("strict kept:", final.get('kept'))
-            st.write("strict removed:", final.get('removed'))
-            st.write("strict top1/top2:", final.get('top1'), final.get('top2'))
-        except NameError:
-            pass  # final이 아직 없으면 무시
+            try:
+                st.write("strict kept:", final.get('kept'))
+                st.write("strict removed:", final.get('removed'))
+                st.write("strict top1/top2:", final.get('top1'), final.get('top2'))
+            except NameError:
+                pass  # final이 아직 없으면 무시
 
     except Exception as e:
         st.warning("얼굴형 추론 중 경고가 발생했습니다. 아래 상세를 확인하세요.")
