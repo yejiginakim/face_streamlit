@@ -311,15 +311,14 @@ def decide_strict_with_abstain(
     return {'label': names[i1], 'kept': kept, 'removed': removed, 'top1': top1, 'top2': top2, 'probs': q}
 
 
+
+
 __all__ = [
     "FaceShapeModel",
-    # 선택: 소프트 보정은 실험용으로 유지
     "apply_rules",
     "decide_rule_vs_top2",
-    # Top-K
     "topk_from_probs",
     "top2_strings",
-    # ✅ 새 결정기(엄격 배제+보류)
-    "decide_strict_with_abstain",
+    "decide_strict_with_abstain",   # ✅ 추가
 ]
 
