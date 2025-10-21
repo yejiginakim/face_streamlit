@@ -1,14 +1,22 @@
-# ---------- 반드시 최상단 ----------
-import os
-os.environ["OPENCV_HEADLESS"] = "1"   # cv2 임포트 '전에' 선언
-
+# ---------- 반드시 파일 최상단에서 단 1회만 ----------
 import streamlit as st
 st.set_page_config(page_title="iPhone PD → 선글라스 합성 (Antena_01)", layout="wide")
 
+# ---------- 여기부터 나머지 임포트 ----------
+import os, pathlib, sys, platform, glob
 import numpy as np
 import cv2
 from PIL import Image
 from huggingface_hub import hf_hub_download
+from faceshape import FaceShapeModel, decide_rule_vs_top2
+from metrics import compute_metrics_bgr
+
+# (선택) TF 로그 줄이기
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
+
+# 이제부터 st.caption, st.title 등 사용 OK
+st.caption(f"Python: {sys.version.split()[0]} / Arch: {platform.machine()} / CWD: {os.getcwd()}")
+
 
 st.write("cv2 version:", cv2.__version__)  # ← 이제 여기서 호출 OK
 
