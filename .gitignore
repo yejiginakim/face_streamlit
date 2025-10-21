@@ -11,3 +11,7 @@ models/*.keras
 models/*.h5
 models/*.zip
 models/*.pt
+
+# local backups
+faceshape_local_backup.py
+requirements_local_backup.txt
