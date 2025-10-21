@@ -1,6 +1,6 @@
 import os
 os.environ["OPENCV_HEADLESS"] = "1"   # ← cv2 임포트 ‘전에’ 있어야 함
-
+st.write("cv2 version:", cv2.__version__)
 import numpy as np, cv2
 
 
