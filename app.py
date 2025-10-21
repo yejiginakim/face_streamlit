@@ -2,6 +2,13 @@
 # --- Keras 백엔드 고정: 반드시 모든 import 이전 ---
 
 
+from faceshape import (
+    FaceShapeModel,
+    decide_rule_vs_top2,  # 안 쓰면 빼도 됨
+    topk_from_probs,
+    top2_strings,
+)
+
 import os
 os.environ.setdefault("KERAS_BACKEND", "tensorflow")
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"   # (선택) TF 로그 줄이기
