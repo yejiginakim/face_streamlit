@@ -30,7 +30,6 @@ st.write("cv2 version:", cv2.__version__)  # ← 이제 여기서 호출 OK
 
 # ---------- 반드시 최상단 1회 ----------
 import streamlit as st
-st.set_page_config(page_title="iPhone PD → 선글라스 합성 (Antena_01)", layout="wide")
 
 # ---------- 기본 설정/임포트 ----------
 import os, pathlib, sys, platform, glob
