@@ -6,6 +6,13 @@ import os
 os.environ.setdefault("KERAS_BACKEND", "tensorflow")
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"   # (선택) TF 로그 줄이기
 os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")  # (선택) CPU 강제
+# app.py 가장 위쪽(임포트 직후)
+import numpy, tensorflow as tf, keras, cv2, PIL
+print("NumPy:", numpy.__version__)
+print("TF:", tf.__version__)
+print("Keras:", keras.__version__)
+print("cv2:", cv2.__version__)
+print("Pillow:", PIL.__version__)
 
 
 import streamlit as st
