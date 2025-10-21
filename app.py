@@ -279,7 +279,7 @@ if faceshape_model is not None:
         top2  = topk_from_probs(probs, model.class_names, k=2)   # [(idx, label, prob), ...]
         labels = top2_strings(top2)                               # ["Oval (54.3%)", "Round (31.8%)"]
 
-st.write("Top-2:", " / ".join(labels))
+        st.write("Top-2:", " / ".join(labels))
 
         classes = faceshape_model.class_names
 
