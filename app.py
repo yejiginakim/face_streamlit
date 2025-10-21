@@ -2,12 +2,8 @@
 # --- Keras 백엔드 고정: 반드시 모든 import 이전 ---
 
 
-from faceshape import (
-    FaceShapeModel,
-    decide_rule_vs_top2,  # 안 쓰면 빼도 됨
-    topk_from_probs,
-    top2_strings,
-)
+from faceshape import topk_from_probs, top2_strings
+
 
 import os
 os.environ.setdefault("KERAS_BACKEND", "tensorflow")
@@ -278,7 +274,13 @@ if faceshape_model is not None:
     try:
         # 1) 모델 확률
         pil_img = Image.fromarray(cv2.cvtColor(face_bgr, cv2.COLOR_BGR2RGB))
-        probs = faceshape_model.predict_probs(pil_img)  # (C,)
+        
+        probs = model.predict_probs(pil_img)     # (C,) 형태로 반환되게 해둠
+        top2  = topk_from_probs(probs, model.class_names, k=2)   # [(idx, label, prob), ...]
+        labels = top2_strings(top2)                               # ["Oval (54.3%)", "Round (31.8%)"]
+
+st.write("Top-2:", " / ".join(labels))
+
         classes = faceshape_model.class_names
 
         # 2) (선택) MediaPipe 지표 — 실패해도 None 반환
