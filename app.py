@@ -1,3 +1,10 @@
+import os
+os.environ["OPENCV_HEADLESS"] = "1"   # ← cv2 임포트 ‘전에’ 있어야 함
+
+import numpy as np, cv2
+
+
+
 # ---------- 반드시 최상단 1회 ----------
 import streamlit as st
 st.set_page_config(page_title="iPhone PD → 선글라스 합성 (Antena_01)", layout="wide")

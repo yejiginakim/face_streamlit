@@ -1,5 +1,5 @@
 numpy==1.26.4
-opencv-contrib-python-headless==4.10.0.84   # ← 이걸로 교체 (중요)
+opencv-python-headless==4.11.0.86   # ← 이것만! (opencv-python / contrib 전부 삭제)
 mediapipe==0.10.21
 Pillow==10.4.0
 pillow-avif-plugin==1.4.6
