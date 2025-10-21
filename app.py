@@ -15,6 +15,27 @@ import keras
 import cv2
 import PIL
 
+import importlib, sys
+try:
+    import mediapipe as mp
+    st.info(f"mediapipe version={getattr(mp,'__version__','?')}  file={getattr(mp,'__file__','?')}")
+    # solutions 경로 테스트
+    try:
+        import mediapipe.solutions.face_mesh as mpfm
+        st.success(f"solutions OK: {mpfm.__file__}")
+    except Exception as e:
+        st.error(f"solutions import failed: {e!r}")
+        # 대체 경로도 테스트
+        try:
+            import mediapipe.python.solutions.face_mesh as mpfm2
+            st.warning(f"python.solutions fallback OK: {mpfm2.__file__}")
+        except Exception as e2:
+            st.error(f"python.solutions fallback failed: {e2!r}")
+except Exception as e:
+    st.error(f"mediapipe import error: {e!r}")
+    st.write("sys.executable:", sys.executable)
+
+
 print("NumPy:", np.__version__)
 print("TF:", tf.__version__)
 print("Keras:", keras.__version__)
