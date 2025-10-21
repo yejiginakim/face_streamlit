@@ -79,7 +79,8 @@ with st.sidebar:
             return None
 
     def _qbool(name, default=False):
-        v = _get := _qget(name)
+        # FIX: 월러스(:=)와 일반 대입 혼용으로 생긴 SyntaxError 제거
+        v = _qget(name)
         if v is None:
             return default
         return str(v).lower() in ("1", "true", "yes", "on")

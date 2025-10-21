@@ -1,4 +1,11 @@
 # ---------- 반드시 최상단 1회 ----------
+# --- Keras 백엔드 고정: 반드시 모든 import 이전 ---
+import os
+os.environ.setdefault("KERAS_BACKEND", "tensorflow")
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"   # (선택) TF 로그 줄이기
+os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")  # (선택) CPU 강제
+
+
 import streamlit as st
 st.set_page_config(page_title="iPhone PD → 선글라스 합성 (Antena_01)", layout="wide")
 

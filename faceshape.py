@@ -1,9 +1,9 @@
-# faceshape.py  — Keras3 로더 + 기존 규칙 유지 (권장)
+# faceshape.py — Keras3 로더 + 기존 규칙 유지 (권장)
 import os
 import numpy as np
 from typing import Tuple, List, Optional
 
-import keras  # ✅ Keras 3
+import keras            # ✅ Keras 3
 from PIL import Image
 
 # ===== 하이퍼 =====
@@ -26,40 +26,32 @@ class FaceShapeModel:
         if not os.path.isfile(classes_path):
             raise FileNotFoundError(f"classes not found: {classes_path}")
 
-        # ✅ Keras3 전용 로더 (augmentation/Normalization/Random* 포함 모델도 OK)
+        # ✅ Keras3 저장 모델 로드 (Random*, Normalization 포함해도 OK)
         self.model = keras.saving.load_model(
             model_path,
             compile=False,
-            safe_mode=False   # 직렬화 이슈/커스텀 객체가 있어도 시도
+            safe_mode=False,
         )
-
         with open(classes_path, "r", encoding="utf-8") as f:
             self.class_names = [ln.strip() for ln in f if ln.strip()]
-
         self.img_size = tuple(img_size)
 
-    def _preprocess(self, pil: Image.Image) -> np.ndarray:
-        # 모델 내부에 Rescaling/Normalization 층이 일반적으로 들어있으므로
-        # 0~255 그대로 투입. (필요하면 아래 주석 해제하여 [-1,1] 폴백 사용)
+    def _preprocess(self, pil: Image.Image):
         pil = pil.convert("RGB").resize(self.img_size)
-        arr = np.asarray(pil, dtype=np.float32)
-        # arr = (arr / 127.5) - 1.0  # ← 모델에 전처리층이 없다면 이 줄을 사용
-        return np.expand_dims(arr, axis=0)
+        x = np.asarray(pil, dtype=np.float32)   # 모델 내부에 Rescaling/Normalization 있다고 가정
+        return x[None, ...]                     # (1,H,W,3)
 
     def predict_probs(self, pil: Image.Image) -> np.ndarray:
         x = self._preprocess(pil)
-        preds = self.model.predict(x, verbose=0)
-        if preds.ndim == 2 and preds.shape[0] == 1:
-            preds = preds[0]
-        # 확률 정규화(수치 안전)
-        preds = np.asarray(preds, dtype=np.float64)
-        s = preds.sum()
-        if s > 0:
-            preds = preds / s
-        return preds
+        y = self.model.predict(x, verbose=0)
+        if y.ndim == 2 and y.shape[0] == 1:
+            y = y[0]
+        y = np.asarray(y, np.float64)
+        s = y.sum()
+        return y / s if s > 0 else y
 
 
-# ---------- 규칙 유틸 (당신 코드 유지) ----------
+# ---------- 규칙 유틸 (기존 로직 유지) ----------
 def _softmax_temp(x, t=1.0, eps=1e-12):
     x = np.asarray(x, dtype=np.float64)
     x = np.clip(x, eps, 1.0)
@@ -78,6 +70,7 @@ def apply_rules(probs, class_names, ar=None, jaw_deg=None, cw=None, jw=None):
 
     idx = {n:i for i,n in enumerate(class_names)}
 
+    # Oblong → Oval veto
     if ('Oblong' in idx) and ('Oval' in idx) and class_names[top1]=='Oblong':
         if (ar is not None and ar < TH_AR_OBLONG) and (jaw_deg is not None and jaw_deg >= TH_JAW_SOFT):
             boost = 1.75 if margin < TH_MARGIN else 1.35
@@ -108,6 +101,7 @@ def apply_rules(probs, class_names, ar=None, jaw_deg=None, cw=None, jw=None):
 
             top1 = int(p.argmax())
 
+    # Round 보정
     cwjw_ratio = None if (cw in (None,) or jw in (None,0)) else float(cw)/float(jw)
     round_candidate = (ar is not None and ar <= TH_AR_ROUND) and \
                       (jaw_deg is not None and jaw_deg >= TH_JAW_ROUND) and \
@@ -122,13 +116,6 @@ def apply_rules(probs, class_names, ar=None, jaw_deg=None, cw=None, jw=None):
     return {'rule_idx': top1, 'rule_label': class_names[top1], 'rule_probs': p}
 
 def decide_rule_vs_top2(probs, class_names, ar=None, jaw_deg=None, cw=None, jw=None) -> Tuple[int, str, str]:
-    """
-    정책:
-      - margin >= TH_MARGIN → top1 유지
-      - margin <  TH_MARGIN →
-          * rule 결과가 {top1, top2} 안이면 → top1 유지
-          * rule 결과가 top2 밖이면 → rule 결과 채택
-    """
     p = np.asarray(probs, dtype=np.float64); p /= np.clip(p.sum(), 1e-12, None)
     order = np.argsort(-p)
     top1, top2 = int(order[0]), int(order[1])
