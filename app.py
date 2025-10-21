@@ -79,7 +79,7 @@ with st.sidebar:
             return None
 
     def _qbool(name, default=False):
-        # FIX: 월러스(:=)와 일반 대입 혼용으로 생긴 SyntaxError 제거
+        # FIX: 월러스(:=) 제거
         v = _qget(name)
         if v is None:
             return default
@@ -141,8 +141,8 @@ with colL:
 
 with colR:
     st.markdown("### 카테고리 선택 ")
-    use_gender = st.multiselect('성별', ['female', 'male', 'unisex'], placeholder = '선택하세요')
-    use_kind = st.multiselect('분류', ['fashion', 'sports'], placeholder = '선택하세요')
+    use_gender = st.multiselect('성별', ['female', 'male', 'unisex'], placeholder='선택하세요')
+    use_kind = st.multiselect('분류', ['fashion', 'sports'], placeholder='선택하세요')
 
 # 예: 플래그로 사용
 is_female = 'female' in use_gender
@@ -222,11 +222,33 @@ IMG_SIZE     = (224, 224)
 def _load_faceshape():
     return FaceShapeModel(MODEL_PATH, CLASSES_PATH, img_size=IMG_SIZE)
 
-if not (os.path.isfile(MODEL_PATH) and os.path.isfile(CLASSES_PATH)):
-    st.warning("※ 얼굴형 모델이 없어서 추천만 진행합니다. (models/*.keras, classes.txt 필요)")
-    faceshape_model = None
+def _is_lfs_pointer(path:str)->bool:
+    """모델 파일이 Git LFS 포인터인지 빠르게 판별"""
+    try:
+        if not os.path.isfile(path):
+            return False
+        if os.path.getsize(path) > 2048:  # 2KB 넘으면 포인터 아님
+            return False
+        with open(path, "rb") as f:
+            head = f.read(256)
+        return (b"git-lfs" in head) or (b"github.com/spec" in head)
+    except Exception:
+        return False
+
+faceshape_model = None
+if not os.path.isfile(MODEL_PATH):
+    st.warning("※ 얼굴형 모델(.keras)이 없습니다. (models/*.keras 필요)")
+elif not os.path.isfile(CLASSES_PATH):
+    st.warning("※ classes.txt 파일이 없습니다. (models/classes.txt 필요)")
+elif _is_lfs_pointer(MODEL_PATH):
+    st.error("모델 파일이 Git LFS 포인터로 보입니다. Releases/S3 등에서 **실제 바이너리**를 받아오세요.")
 else:
-    faceshape_model = _load_faceshape()
+    try:
+        faceshape_model = _load_faceshape()
+    except Exception as e:
+        st.error("얼굴형 모델 로드 실패 — 모델 없이 추천은 스킵하고 합성만 진행합니다.")
+        st.exception(e)
+        faceshape_model = None
 
 final_label = None
 if faceshape_model is not None:
@@ -265,7 +287,8 @@ if faceshape_model is not None:
             })
             st.caption(reason)
     except Exception as e:
-        st.warning(f"얼굴형 추론 중 경고: {e}")
+        st.warning("얼굴형 추론 중 경고가 발생했습니다. 아래 상세를 확인하세요.")
+        st.exception(e)
 
 # 다운스트림에서 쓰기 쉽게 세션에 저장
 st.session_state["faceshape_label"] = final_label
@@ -330,7 +353,6 @@ fg_bgra = vision.remove_white_to_alpha(fg_bgra, thr=240)
 fg_bgra = vision.trim_transparent(fg_bgra, pad=8)
 
 # ========= 스케일 & 위치 계산 =========
-
 h_face, w_face = face_bgr.shape[:2]
 
 # 프레임의 초기 치수
@@ -340,7 +362,7 @@ h0, w0 = fg_bgra.shape[:2]
 #    - PD(px) 우선 사용
 #    - PD(mm)만 있으면 mm->px 변환
 #    - 보정계수(GCD→PD)로 과대/과소를 1차 조절
-GCD2PD_CAL = 0.92   # <- 너무 크면 0.88~0.95로 낮추고, 작으면 0.95~1.02로 올리세요.
+GCD2PD_CAL = 0.92
 
 target_GCD_px = None
 if pd_px is not None:
