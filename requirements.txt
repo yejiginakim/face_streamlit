@@ -1,6 +1,17 @@
 streamlit==1.38.0
-numpy>=1.24
-Pillow>=10.0
-opencv-python-headless>=4.8
-keras[tf]==3.4.1        # ✅ TF 백엔드 포함된 Keras3 세트
-mediapipe>=0.10         # (얼굴 랜드마크 쓰면)
+
+# 🚫 numpy 2.x 금지 — TF 휠이 1.x로 빌드되어 있음
+numpy==1.26.4
+
+Pillow==10.4.0
+opencv-python-headless==4.10.0.84
+
+# Keras3 + TF (tf.keras 금지, 백엔드는 TF)
+keras==3.4.1
+tensorflow==2.17.0
+
+# (얼굴 랜드마크 쓰면) mediapipe도 numpy 1.x와 잘 맞는 최신 0.10.x
+mediapipe==0.10.14
+
+# protobuf은 TF가 3.20<=,<6 선호 — 최신 pip가 적절히 잡아줌(문제시 아래 라인 해제)
+# protobuf==4.25.3
