@@ -2,74 +2,73 @@
 import streamlit as st
 st.set_page_config(page_title="iPhone PD → 선글라스 합성 (Antena_01)", layout="wide")
 
-# ---------- 기본 진단 캡션 ----------
-import sys, platform, os, glob
+# ---------- 기본 설정/임포트 ----------
+import os, pathlib, sys, platform, glob
+import numpy as np, cv2
+from PIL import Image
+from huggingface_hub import hf_hub_download
+
+from faceshape import FaceShapeModel, decide_rule_vs_top2
+from metrics import compute_metrics_bgr
+
+# (선택) TF 로그 줄이기
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
 st.caption(f"Python: {sys.version.split()[0]} / Arch: {platform.machine()} / CWD: {os.getcwd()}")
 
-# ---------- 유틸: 이미지 표시(버전 호환) ----------
-def show_image_bgr(img_bgr, **kwargs):
-    try:
-        import cv2
-        import numpy as np
-        rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
-        try:
-            st.image(rgb, use_container_width=True, **kwargs)
-        except TypeError:
-            try:
-                st.image(rgb, use_column_width=True, **kwargs)
-            except TypeError:
-                st.image(rgb, **kwargs)
-    except Exception as e:
-        st.error(f"이미지 표시 중 오류: {e}")
-
-# ---------- 지연 임포트: 실패해도 UI는 뜨게 ----------
-cv2 = np = Image = None
-vision = None
+# ---------- vision 임포트만 지연(없어도 UI 뜨게) ----------
 err_msgs = []
-
 try:
-    import numpy as np
-except Exception as e:
-    err_msgs.append(f"numpy import 실패: {e}")
-
-try:
-    import cv2
-except Exception as e:
-    err_msgs.append(f"opencv(cv2) import 실패: {e}")
-
-try:
-    from PIL import Image
-except Exception as e:
-    err_msgs.append(f"Pillow import 실패: {e}")
-
-try:
-    import vision  # vision.py 에 detect_pd_px / load_fixed_antena / overlay_rgba 있어야 함
+    import vision  # vision.py에 detect_pd_px / load_fixed_antena / overlay_rgba 필요
 except Exception as e:
     err_msgs.append(f"vision 임포트 실패: {e}")
 
-# ▶ 추가: 얼굴형 추론을 위한 모듈들
-try:
-    from faceshape import FaceShapeModel, decide_rule_vs_top2
-except Exception as e:
-    err_msgs.append(f"faceshape 모듈 임포트 실패: {e}")
+# ---------- HF Hub에서 모델/클래스 경로 확보 ----------
+REPO_ID = "gina728/faceshape1"
+MODEL_FILENAME = "faceshape_best.keras"   # HF에 올린 정확한 파일명
+CLASSES_PATH = "models/classes.txt"       # 레포에 이 이름으로 커밋해두는 걸 권장
+
+@st.cache_resource
+def get_model_path():
+    local = pathlib.Path("models") / MODEL_FILENAME
+    if local.exists():
+        return str(local)
+    return hf_hub_download(repo_id=REPO_ID, filename=MODEL_FILENAME, repo_type="model")
+
+@st.cache_resource
+def load_faceshape_model():
+    model_path = get_model_path()
+    if not os.path.isfile(CLASSES_PATH):
+        raise FileNotFoundError(
+            f"classes not found: {CLASSES_PATH}  (레포에 models/classes.txt로 커밋하세요)"
+        )
+    return FaceShapeModel(model_path, CLASSES_PATH, img_size=(224, 224))
 
 try:
-    from metrics import compute_metrics_bgr
+    faceshape_model = load_faceshape_model()
+    st.caption(f"Loaded model from: {get_model_path()}")
+    st.caption(f"Classes path: {CLASSES_PATH}")
 except Exception as e:
-    err_msgs.append(f"metrics 모듈 임포트 실패: {e}")
+    st.error(f"얼굴형 모델 로드 실패: {e}")
+    st.stop()
 
-# ---------- 사이드바 / 입력 UI는 무조건 출력 ----------
+# ---------- 유틸: 이미지 표시 ----------
+def show_image_bgr(img_bgr, **kwargs):
+    try:
+        rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+        st.image(rgb, use_container_width=True, **kwargs)
+    except Exception as e:
+        st.error(f"이미지 표시 중 오류: {e}")
+
+# ---------- 사이드바 / 입력 UI ----------
 st.title("🧍→🕶️ Antena_01 합성 (GCD 앵커) — 안전모드")
 
 with st.sidebar:
     st.subheader("📱 iPhone/URL 측정값")
 
-    # ---- 안전한 쿼리 파서 ----
+    # 안전 쿼리 파서
     def _qget(name):
         v = st.query_params.get(name)
-        if isinstance(v, list):  # 다중 값일 때 첫 번째
-            v = v[0]
-        return v
+        return v[0] if isinstance(v, list) else v
 
     def _qfloat(name):
         v = _qget(name)
@@ -77,23 +76,22 @@ with st.sidebar:
             return float(v) if v not in (None, "", "None") else None
         except Exception:
             return None
+
     def _qbool(name, default=False):
         v = _qget(name)
         if v is None:
             return default
         return str(v).lower() in ("1", "true", "yes", "on")
 
-    # ---- 쿼리 원본(raw) 값만 일단 읽기 ----
     PD_MM_raw       = _qfloat("pd_mm") or _qfloat("pd")
     CHEEK_MM_raw    = _qfloat("cheek_mm") or _qfloat("cheek")
     NOSECHIN_MM_raw = _qfloat("nosechin_mm") or _qfloat("nosechin")
 
-    # ✅ 기본값: 쿼리 플래그로 제어 (없으면 False)
     use_phone_default = _qbool("use_phone", default=False)
     use_phone = st.checkbox("iPhone/URL 측정값 사용", value=use_phone_default, key="use_phone_ck")
 
     DEFAULT_CHEEK_MM = 150.0
-    DEFAULT_PD_MM    = None  # None이면 나중에 PD_px 사용
+    DEFAULT_PD_MM    = None
 
     # 얼굴폭(mm)
     if use_phone and (CHEEK_MM_raw is not None):
@@ -108,18 +106,17 @@ with st.sidebar:
         st.write(f"👁️ PD(mm): {PD_MM:.1f} (iPhone)")
     else:
         pd_in = st.number_input("PD(mm) (옵션, 비워도 됨)", value=0.0, step=0.1, format="%.1f")
-        PD_MM = pd_in if pd_in > 0 else DEFAULT_PD_MM  # 0 → None
+        PD_MM = pd_in if pd_in > 0 else DEFAULT_PD_MM
 
-    # 기타
     NOSECHIN_MM = NOSECHIN_MM_raw if (use_phone and NOSECHIN_MM_raw is not None) else None
 
-    # ✅ 하드 클램프
+    # 하드 클램프
     if CHEEK_MM is not None:
         CHEEK_MM = float(min(max(CHEEK_MM, 100.0), 220.0))
     if PD_MM is not None:
         PD_MM = float(min(max(PD_MM, 45.0), 75.0))
 
-    # ✅ 핵심: 폰값 미사용이면 강제로 None
+    # 폰값 미사용이면 강제로 None
     if not use_phone:
         PD_MM = None
         NOSECHIN_MM = None
@@ -129,12 +126,7 @@ with st.sidebar:
     dx = st.slider("수평 오프셋(px)", -200, 200, 0)
     dy = st.slider("수직 오프셋(px)", -200, 200, 0)
     scale_mult = st.slider("스케일 보정(배)", 0.8, 1.2, 1.0)
-
     st.caption("iPhone/URL 측정값 사용: " + ("ON" if use_phone else "OFF"))
-
-    # (디버그용) 현재 상태 출력 — 문제 생기면 잠깐 열어보세요
-    # st.caption(f"DEBUG use_phone={use_phone}, PD_MM_raw={PD_MM_raw}, PD_MM={PD_MM}, CHEEK_MM={CHEEK_MM}")
-
 
 colL, colR = st.columns(2)
 with colL:
@@ -143,39 +135,22 @@ with colL:
 
 with colR:
     st.markdown("### 카테고리 선택 ")
-    use_gender = st.multiselect('성별', ['female', 'male', 'unisex'], placeholder = '선택하세요')
-    use_kind = st.multiselect('분류', ['fashion', 'sports'], placeholder = '선택하세요')
+    use_gender = st.multiselect('성별', ['female', 'male', 'unisex'], placeholder='선택하세요')
+    use_kind   = st.multiselect('분류', ['fashion', 'sports'],    placeholder='선택하세요')
 
-# 예: 플래그로 사용
-is_female = 'female' in use_gender
-is_male   = 'male'   in use_gender
-is_unisex = 'unisex' in use_gender
-is_fashion = 'fashion' in use_kind
-is_sports  = 'sports'  in use_kind
-
-# 예: 세션에 저장(다른 페이지/콜백에서도 사용)
 st.session_state['use_gender'] = use_gender
 st.session_state['use_kind']   = use_kind
 
-# (선택) 세션 키로도 보관
-st.session_state['use_gender'] = use_gender
-st.session_state['use_kind']   = use_kind
-
-# 5) 실행 버튼: 두 그룹 모두 최소 1개 선택돼야 활성화
 disabled = not (use_gender and use_kind)
 run = st.button('실행', disabled=disabled)
 if disabled:
     st.warning('성별과 분류에서 각각 최소 1개 이상 선택하세요.')
-elif run:
-    st.success(f'실행! 성별={use_gender}, 분류={use_kind}')
-    # TODO: 실제 처리 로직
-    if err_msgs:
-        st.error("초기 임포트 경고가 있어요. 아래 로그를 확인하세요.")
-        st.code("\n".join(err_msgs), language="text")
+elif run and err_msgs:
+    st.error("초기 임포트 경고가 있어요. 아래 로그를 확인하세요.")
+    st.code("\n".join(err_msgs), language="text")
 
-# ---------- 임포트 실패 시, 여기서 멈추지 말고 안내만 ----------
 if err_msgs:
-    st.info("위 임포트 문제를 해결해야 합성이 진행됩니다. (requirements.txt / OpenCV headless / vision.py / faceshape.py / metrics.py 확인)")
+    st.info("vision 모듈 문제를 해결해야 합성이 진행됩니다. (vision.py 확인)")
     st.stop()
 
 st.divider()
@@ -189,11 +164,9 @@ try:
     fg_bgra, dims = _load_antena()
 except Exception as e:
     st.error(f"프레임 로드 호출 실패: {e}")
-    dims = None
-    fg_bgra = None
+    st.stop()
 
-
-if fg_bgra is None or dims is None:
+if not fg_bgra or not dims:
     st.error("프레임 이미지를 읽을 수 없어요. 경로/포맷을 확인해 주세요.")
     st.code(f"""
 exists(frames)={os.path.isdir('frames')}
@@ -208,12 +181,11 @@ GCD = A + DBL
 k = (TOTAL / GCD) if GCD else 2.0
 st.caption(f"프레임 치수 A={A}, DBL={DBL}, TOTAL={TOTAL} (GCD={GCD}, k=TOTAL/GCD={k:.3f})")
 
-# ---------- 얼굴 이미지 업로드 필요 ----------
+# ---------- 얼굴 이미지 ----------
 if not img_file:
     st.info("얼굴 사진을 업로드하면 합성을 시작합니다.")
     st.stop()
 
-# ---------- 얼굴 이미지 읽기 ----------
 try:
     file_bytes = np.frombuffer(img_file.read(), dtype=np.uint8)
     face_bgr = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
@@ -223,58 +195,21 @@ except Exception as e:
     st.error(f"얼굴 이미지 로드 실패: {e}")
     st.stop()
 
-# ============================
-# ▶ 추가: 얼굴형 inference (문자열 리턴)
-# ============================
-MODEL_PATH   = "models/faceshape_best.keras"
-CLASSES_PATH = "models/classes.txt"
-IMG_SIZE     = (224, 224)
-
-@st.cache_resource
-def _load_faceshape():
-    return FaceShapeModel(MODEL_PATH, CLASSES_PATH, img_size=IMG_SIZE)
-
-if not (os.path.isfile(MODEL_PATH) and os.path.isfile(CLASSES_PATH)):
-    st.warning("※ 얼굴형 모델이 없어서 추천만 진행합니다. (models/*.keras, classes.txt 필요)")
-    faceshape_model = None
-else:
-    faceshape_model = _load_faceshape()
-
-final_label = None
-if faceshape_model is not None:
-    # PIL 변환 후 모델 추론
-    pil_img = Image.fromarray(cv2.cvtColor(face_bgr, cv2.COLOR_BGR2RGB))
-    probs = faceshape_model.predict_probs(pil_img)  # (C,)
-
-    # MediaPipe 지표
-    ar, jaw, cw, jw = compute_metrics_bgr(face_bgr)
-
-    # 하이브리드 정책: margin<TH → rule이 top2 밖이면 rule 채택 / top2 안이면 top1 유지
-    idx, label, reason = decide_rule_vs_top2(
-        probs, faceshape_model.class_names, ar=ar, jaw_deg=jaw, cw=cw, jw=jw
-    )
-    final_label = label
-    
-# 다운스트림에서 쓰기 쉽게 세션에 저장
+# ---------- 얼굴형 추론 (HF 모델 사용) ----------
+ar, jaw, cw, jw = compute_metrics_bgr(face_bgr)  # MediaPipe 지표
+pil_img = Image.fromarray(cv2.cvtColor(face_bgr, cv2.COLOR_BGR2RGB))
+probs = faceshape_model.predict_probs(pil_img)
+_, final_label, explain = decide_rule_vs_top2(
+    probs, faceshape_model.class_names, ar=ar, jaw_deg=jaw, cw=cw, jw=jw
+)
 st.session_state["faceshape_label"] = final_label
 
-# ============================
-# PD/자세/스케일/합성
-# ============================
-
-
-# ============================
-# PD 계산 (iPhone/수동/MediaPipe) + 출력
-# ============================
+# ---------- PD/자세/스케일/합성 ----------
 pd_px   = None
 mid     = (0, 0)
 eye_roll_deg = 0.0
 PD_SRC  = None  # 'iphone' | 'manual' | 'mediapipe' | None
 
-# 우선순위:
-# 1) 수동 입력 PD_MM(양수면) -> 'manual'
-# 2) use_phone 켠 상태 + PD_MM_raw(URl/iPhone 값 존재) -> 'iphone'
-# 3) 둘 다 없으면 MediaPipe로 pd_px 계산 -> 'mediapipe'
 if (PD_MM is not None) and (PD_MM > 0):
     PD_SRC = "manual"
 elif use_phone and (PD_MM_raw is not None):
@@ -291,7 +226,6 @@ else:
         st.error(f"MediaPipe PD 계산 실패: {e}")
         st.stop()
 
-# 2) (있으면) 3축 자세 → 없으면 roll은 눈선 기반
 yaw = pitch = roll = None
 if hasattr(vision, "head_pose_ypr"):
     try:
@@ -301,7 +235,6 @@ if hasattr(vision, "head_pose_ypr"):
 if roll is None:
     roll = eye_roll_deg
 
-# ✅ PD 표시(소스별로 문구 다르게)
 if PD_SRC == "mediapipe":
     st.write(
         f"**PD_px**: {pd_px:.2f} px  /  "
@@ -314,70 +247,33 @@ elif PD_SRC in ("iphone", "manual"):
 else:
     st.warning("PD 소스를 확인할 수 없습니다.")
 
-
-
-
-
-
-
-# ========= 스케일 & 위치 계산 (교체 블록) =========
-
+# 스케일 & 위치 계산
 h_face, w_face = face_bgr.shape[:2]
-
 fg_bgra = vision.remove_white_to_alpha(fg_bgra, thr=240)
 fg_bgra = vision.trim_transparent(fg_bgra, pad=8)
-
-
-# 프레임의 초기 치수
 h0, w0 = fg_bgra.shape[:2]
 
-# 1) PD/볼폭 정보 준비
-#    - PD(px) 우선 사용
-#    - PD(mm)만 있으면 mm->px 변환
-#    - 보정계수(GCD→PD)로 과대/과소를 1차 조절
-GCD2PD_CAL = 0.92   # <- 너무 크면 0.88~0.95로 낮추고, 작으면 0.95~1.02로 올리세요.
+GCD2PD_CAL = 0.92
+target_GCD_px = pd_px if pd_px is not None else (
+    (PD_MM / (CHEEK_MM / max(w_face, 1e-6))) if PD_MM else None
+)
 
-target_GCD_px = None
-if pd_px is not None:
-    target_GCD_px = pd_px
-elif PD_MM:
-    mm_per_px = CHEEK_MM / max(w_face, 1e-6)
-    target_GCD_px = PD_MM / max(mm_per_px, 1e-6)
-
-# 볼폭(cheek width) 픽셀 – 하드 클램프 기준
-# 볼폭(cheek width) 픽셀 – 하드 클램프 기준
-Cw_px = None
-if hasattr(vision, "cheek_width_px"):
-    try:
-        Cw_px = vision.cheek_width_px(face_bgr)  # vision.py에 있으면 사용
-    except Exception:
-        Cw_px = None
-
-# 폴백: MediaPipe 메트릭에서 나온 cw(px) 사용
-try:
-    if Cw_px is None and (cw is not None):
-        Cw_px = float(cw)
-except NameError:
-    # 만약 상단에서 메트릭을 아직 계산하지 않았다면 그냥 None 유지
-    Cw_px = None
-
-
-# 프레임 파일에서 GCD(px) 추정: width / k   (k = TOTAL / (A+DBL))
 frame_GCD_px0 = w0 / max(k, 1e-6)
-
-# 2) 목표 폭(px) 산출
 if target_GCD_px is not None:
-    # GCD 정합 기반 폭
-    target_GCD_px *= GCD2PD_CAL
-    target_total_px = target_GCD_px * k     # TOTAL = k * GCD
+    target_total_px = (target_GCD_px * GCD2PD_CAL) * k
 else:
-    # PD 정보가 전혀 없으면 TOTAL(mm)로 후퇴
     mm_per_px = CHEEK_MM / max(w_face, 1e-6)
     target_total_px = TOTAL / max(mm_per_px, 1e-6)
 
-# 3) 하드 클램프: 얼굴/볼폭 대비 과대 방지
-#    - 프레임 총폭이 얼굴폭의 0.60~0.95배 범위로
-#    - Cw(px)가 있으면 0.70~0.98배 추가 제한
+Cw_px = None
+if hasattr(vision, "cheek_width_px"):
+    try:
+        Cw_px = vision.cheek_width_px(face_bgr)
+    except Exception:
+        Cw_px = None
+if Cw_px is None and (cw is not None):
+    Cw_px = float(cw)
+
 min_w = 0.60 * w_face
 max_w = 0.95 * w_face
 if Cw_px is not None:
@@ -385,160 +281,43 @@ if Cw_px is not None:
     max_w = min(max_w, 0.98 * Cw_px)
 
 target_total_px = float(np.clip(target_total_px, min_w, max_w))
-
-# 4) 스케일 계산 + 안전 클립
 scale = (target_total_px / max(w0, 1)) * float(scale_mult)
 scale = float(np.clip(scale, 0.35, 2.2))
 
-# 5) 리사이즈
 new_size = (max(1, int(w0 * scale)), max(1, int(h0 * scale)))
 fg_scaled = cv2.resize(fg_bgra, new_size, interpolation=cv2.INTER_LINEAR)
 
-# 6) 회전(roll 반대)
 M = cv2.getRotationMatrix2D((fg_scaled.shape[1] / 2, fg_scaled.shape[0] / 2), -roll, 1.0)
 fg_rot = cv2.warpAffine(
     fg_scaled, M, (fg_scaled.shape[1], fg_scaled.shape[0]),
     flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=(0,0,0,0)
 )
 
-# 7) 위치 – PD 중점 기준(있으면), 없으면 중앙
 pitch_deg = pitch if pitch is not None else 0.0
 pitch_dy  = int(pitch_deg * 0.8)
 
-if mid == (0, 0):  # iPhone 모드(중점 없음)
+if mid == (0, 0):
     gx = int(face_bgr.shape[1] * 0.5 - fg_rot.shape[1] * 0.5) + dx
     gy = int(face_bgr.shape[0] * 0.45 - fg_rot.shape[0] * 0.5) + dy
-else:               # MediaPipe 모드(눈 중점 기준)
-    anchor = 0.50   # 렌즈 중앙 기준 정렬(0.45~0.55로 미세조정)
+else:
+    anchor = 0.50
     gx = int(mid[0] - fg_rot.shape[1] * anchor) + dx
     gy = int(mid[1] - fg_rot.shape[0] * 0.50) + dy + pitch_dy
 
-# ========= 스케일 & 위치 계산 (교체 블록 끝) =========
-
-
-
-# ===== 얼굴형 판별 (faceshape.py + metrics.py 호출만) =====
-MODEL_PATH, CLASSES_PATH, IMG_SIZE = "models/faceshape_best.keras", "models/classes.txt", (224, 224)
-
-@st.cache_resource
-def _load_faceshape():
-    return FaceShapeModel(MODEL_PATH, CLASSES_PATH, img_size=IMG_SIZE)
-
-faceshape_model = None
-if os.path.isfile(MODEL_PATH) and os.path.isfile(CLASSES_PATH):
-    try:
-        faceshape_model = _load_faceshape()
-    except Exception as e:
-        st.info(f"얼굴형 모델 로드 실패(룰 기반 진행): {e}")
-
-# MediaPipe 지표
-try:
-    ar, jaw, cw, jw = compute_metrics_bgr(face_bgr)
-except Exception as e:
-    st.info(f"메트릭 계산 실패: {e}")
-    ar = jaw = cw = jw = None
-
-# 최종 라벨 (모델+정책 호출)
-final_label, explain = None, None
-try:
-    if faceshape_model is not None:
-        pil_img = Image.fromarray(cv2.cvtColor(face_bgr, cv2.COLOR_BGR2RGB))
-        probs = faceshape_model.predict_probs(pil_img)
-        _, final_label, explain = decide_rule_vs_top2(
-            probs, faceshape_model.class_names, ar=ar, jaw_deg=jaw, cw=cw, jw=jw
-        )
-    else:
-        # ------- Rule-only fallback (모델 없을 때) -------
-        OBLONG_AR_MIN = 1.50
-
-        SQUARE_AR_MIN, SQUARE_AR_MAX = 1.03, 1.18
-        SQUARE_JAW_MIN, SQUARE_JAW_MAX = 125.0, 140.0
-        SQUARE_TAPER_MIN = 0.74   # taper = Jw/Cw
-
-        HEART_TAPER_MAX, HEART_JAW_MIN, HEART_AR_MIN = 0.80, 128.0, 1.20
-        ROUND_TIGHT_AR, ROUND_TIGHT_JAW = 1.02, 136.0
-
-        # 보조 지표: taper(턱폭/볼폭)
-        taper = None
-        if (cw is not None) and (jw is not None) and (cw > 0):
-            taper = float(jw) / float(cw)
-
-        # 1) Oblong
-        if (ar is not None) and (ar >= OBLONG_AR_MIN):
-            final_label, explain = "Oblong", f"rule: AR≥{OBLONG_AR_MIN:.2f}"
-
-        # 2) Square  ← 주신 케이스가 여기에 매칭되도록 튜닝
-        elif (ar is not None and SQUARE_AR_MIN <= ar <= SQUARE_AR_MAX) and \
-             (jaw is not None and SQUARE_JAW_MIN <= jaw <= SQUARE_JAW_MAX) and \
-             (taper is None or taper >= SQUARE_TAPER_MIN):
-            final_label, explain = "Square", (
-                f"rule: {SQUARE_AR_MIN:.2f}≤AR≤{SQUARE_AR_MAX:.2f}, "
-                f"{SQUARE_JAW_MIN:.0f}°≤jaw≤{SQUARE_JAW_MAX:.0f}°, "
-                f"taper≥{SQUARE_TAPER_MIN:.2f}"
-            )
-
-        # 3) Heart (Square 미충족 시)
-        elif (taper is not None and taper < HEART_TAPER_MAX) and \
-             (jaw is not None and jaw >= HEART_JAW_MIN) and \
-             ((ar is None) or (ar >= HEART_AR_MIN)):
-            final_label, explain = "Heart", (
-                f"rule: taper={taper:.3f}<{HEART_TAPER_MAX:.2f}, "
-                f"jaw≥{HEART_JAW_MIN:.0f}°, "
-                + (f"AR≥{HEART_AR_MIN:.2f}" if ar is not None else "AR n/a")
-            )
-
-        # 4) Round (좀 더 빡세게)
-        elif (ar is not None and ar <= ROUND_TIGHT_AR) and \
-             (jaw is not None and jaw >= ROUND_TIGHT_JAW):
-            final_label, explain = "Round", (
-                f"rule: AR≤{ROUND_TIGHT_AR:.2f} & jaw≥{ROUND_TIGHT_JAW:.0f}°"
-            )
-
-        # 5) 나머지 Oval
-        else:
-            final_label, explain = "Oval", "rule: default oval"
-   
-   
-except Exception as e:
-    st.info(f"얼굴형 판별 실패(Unknown 처리): {e}")
-    final_label, explain = "Unknown", "no model/metrics"
-
-# 화면 표시 + 세션 저장
-st.markdown("### 얼굴형 판별 결과")
-st.success(f"당신은 **{final_label}형**입니다.")
-with st.expander("판별 근거(디버그)"):
-    st.write({
-        "AR": None if ar is None else round(float(ar), 4),
-        "jaw_deg": None if jaw is None else round(float(jaw), 2),
-        "Cw": None if cw is None else round(float(cw), 2),
-        "Jw": None if jw is None else round(float(jw), 2),
-        "explain": explain
-    })
-st.session_state["faceshape_label"] = final_label
-
-
-
-
-
-
-
-# 8) 합성 전: 여백 확보 (잘림 방지)
+# 합성 (여백 확보)
 h_bg, w_bg = face_bgr.shape[:2]
 margin_x, margin_y = 300, 150
 bg_expanded = cv2.copyMakeBorder(
     face_bgr, margin_y, margin_y, margin_x, margin_x,
     cv2.BORDER_CONSTANT, value=(0, 0, 0)
 )
-
-# 위치 좌표도 margin 보정
 gx_expanded = gx + margin_x
 gy_expanded = gy + margin_y
 
-# 9) 합성
 out = vision.overlay_rgba(bg_expanded, fg_rot, gx_expanded, gy_expanded)
 show_image_bgr(out, caption="합성 결과")
 
-# ---------- 다운로드 ----------
+# 다운로드
 try:
     from io import BytesIO
     rgb = cv2.cvtColor(out, cv2.COLOR_BGR2RGB)
@@ -549,8 +328,8 @@ try:
 except Exception as e:
     st.warning(f"다운로드 준비 중 경고: {e}")
 
-# ========= (옵션) 얼굴형 기반 추천 예시 =========
-if final_label:
+# (옵션) 얼굴형 기반 추천
+if final_label := st.session_state.get("faceshape_label"):
     rec = None
     if final_label == "Oval":
         rec = "대부분의 프레임 OK (aviator/wayfarer/스퀘어/원형)"
@@ -562,7 +341,16 @@ if final_label:
         rec = "세로를 낮추고 가로가 긴 타입 (wayfarer/클럽마스터)"
     elif final_label == "Heart":
         rec = "하부가 살짝 넓은 오벌/보스턴, 얇은 메탈 림"
-
+    st.markdown("### 얼굴형 판별 결과")
+    st.success(f"당신은 **{final_label}형**입니다.")
+    with st.expander("판별 근거(디버그)"):
+        st.write({
+            "AR": None if ar is None else round(float(ar), 4),
+            "jaw_deg": None if jaw is None else round(float(jaw), 2),
+            "Cw": None if cw is None else round(float(cw), 2),
+            "Jw": None if jw is None else round(float(jw), 2),
+            "explain": explain
+        })
     if rec:
         st.info(f"👓 얼굴형({final_label}) 추천: {rec}")
 
