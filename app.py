@@ -38,6 +38,7 @@ try:
     # faceshape는 KERAS_BACKEND 고정 후에 임포트해야 안전
     from faceshape import (
         FaceShapeModel,
+        apply_rules,
         decide_rule_vs_top2,   # 쓰지 않으려면 임포트 안 해도 됨
         topk_from_probs,
         top2_strings,
@@ -260,11 +261,11 @@ if faceshape_model is not None:
         # (A) 모델 확률 (보정 없이 Top-2만 표시)
         pil_img = PIL.Image.fromarray(cv2.cvtColor(face_bgr, cv2.COLOR_BGR2RGB))
         probs = faceshape_model.predict_probs(pil_img)                # ← faceshape_model 사용
-        top2  = topk_from_probs(probs, faceshape_model.class_names)   # Top-2
-        labels = top2_strings(top2)
+        top2_raw = topk_from_probs(probs, faceshape_model.class_names)    # 원본
+        labels_raw = top2_strings(top2_raw)
 
-        st.subheader("모델 Top-2")
-        st.write(" / ".join(labels))
+        st.subheader("모델 Top-2 (원본)")
+        st.write(" / ".join(labels_raw))
 
         # (B) (선택) MediaPipe 지표
         try:
@@ -272,15 +273,28 @@ if faceshape_model is not None:
         except Exception:
             ar = jaw = cw = jw = None
 
-        # (C) 규칙 결합 결과(원하면 사용, 아니면 생략 가능)
-        idx, label, reason = decide_rule_vs_top2(
-            probs, faceshape_model.class_names, ar=ar, jaw_deg=jaw, cw=cw, jw=jw
-        )
-        final_label = label
+        # (C) 규칙 보정 + 재랭킹 🔧
+        if any(v is not None for v in (ar, jaw, cw, jw)):
+            adj = apply_rules(                                      # 🔧 보정 실행
+            probs, faceshape_model.class_names,
+            ar=ar, jaw_deg=jaw, cw=cw, jw=jw
+            )
+            probs_adj = adj['rule_probs']
+            top2_adj  = topk_from_probs(probs_adj, faceshape_model.class_names)
+            labels_adj = top2_strings(top2_adj)
+
+            st.subheader("모델 Top-2 (규칙 보정 후)")               # 🔧 보정 결과 표시
+            st.write(" / ".join(labels_adj))
+            final_label = adj['rule_label']                          # 🔧 최종 라벨은 보정 결과
+            reason = "rules+model"
+        else:
+            # 지표가 없으면 모델 원본 유지
+            idx, final_label, reason = decide_rule_vs_top2(probs, faceshape_model.class_names)
+            st.info("지표 없음 → 보정 미적용 (model-top1)")
 
         with st.expander("얼굴형 디버그"):
             order = np.argsort(-probs)
-            st.write("모델 상위 확률:")
+            st.write("모델 상위 확률(원본):")
             for i in order[:min(5, len(probs))]:
                 st.write(f"- {faceshape_model.class_names[i]:7s}: {probs[i]:.4f}")
             st.write("지표:", {
