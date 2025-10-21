@@ -166,7 +166,7 @@ except Exception as e:
     st.error(f"프레임 로드 호출 실패: {e}")
     st.stop()
 
-if not fg_bgra or not dims:
+if fg_bgra is None or dims is None:
     st.error("프레임 이미지를 읽을 수 없어요. 경로/포맷을 확인해 주세요.")
     st.code(f"""
 exists(frames)={os.path.isdir('frames')}
