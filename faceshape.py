@@ -61,6 +61,46 @@ def _softmax(logits):
     s = ex.sum()
     return ex / np.clip(s, 1e-12, None)
 
+
+
+def decide_with_abstain(
+    probs, class_names,
+    ar=None, jaw_deg=None, cw=None, jw=None,
+    ratio_low_mid=None, w_top=None, w_mid=None, w_low=None, fw_approx=None,
+    top1_min=0.55, gap_min=0.10,  # 보류 임계값
+    **rule_kwargs
+):
+    """
+    규칙 보정 + 보류(ABSTAIN)까지 포함한 최종 의사결정.
+    반환: dict(label: str|None, top1: (idx,label,p), top2: ..., reason_tags: [..], probs: np.ndarray)
+    """
+    # 1) 규칙 보정
+    out = apply_rules(
+        probs, class_names,
+        ar=ar, jaw_deg=jaw_deg, cw=cw, jw=jw,
+        ratio_low_mid=ratio_low_mid, w_top=w_top, w_mid=w_mid, w_low=w_low, fw_approx=fw_approx,
+        **rule_kwargs
+    )
+    p = out['rule_probs']; names=list(class_names)
+    order = np.argsort(-p)
+    i1, i2 = int(order[0]), (int(order[1]) if len(order) > 1 else None)
+    top1 = (i1, names[i1], float(p[i1]))
+    top2 = (i2, names[i2], float(p[i2])) if i2 is not None else None
+
+    # 2) 보류 판단
+    reason = ['rules+model']
+    if top1[2] < top1_min:
+        reason.append('low_conf')
+        return {'label': None, 'top1': top1, 'top2': top2, 'reason_tags': reason, 'probs': p}
+    if top2 is not None and (top1[2] - top2[2] < gap_min):
+        reason.append('close_top2')
+        return {'label': None, 'top1': top1, 'top2': top2, 'reason_tags': reason, 'probs': p}
+
+    # 3) 확정
+    return {'label': top1[1], 'top1': top1, 'top2': top2, 'reason_tags': reason, 'probs': p}
+
+
+
 def apply_rules(
     probs, class_names,
     ar=None, jaw_deg=None, cw=None, jw=None,
