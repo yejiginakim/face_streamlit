@@ -1,7 +1,22 @@
+# ---------- 반드시 최상단 ----------
 import os
-os.environ["OPENCV_HEADLESS"] = "1"   # ← cv2 임포트 ‘전에’ 있어야 함
-st.write("cv2 version:", cv2.__version__)
-import numpy as np, cv2
+os.environ["OPENCV_HEADLESS"] = "1"   # cv2 임포트 '전에' 선언
+
+import streamlit as st
+st.set_page_config(page_title="iPhone PD → 선글라스 합성 (Antena_01)", layout="wide")
+
+import numpy as np
+import cv2
+from PIL import Image
+from huggingface_hub import hf_hub_download
+
+st.write("cv2 version:", cv2.__version__)  # ← 이제 여기서 호출 OK
+
+
+
+
+
+
 
 
 
