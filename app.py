@@ -269,28 +269,30 @@ if faceshape_model is not None:
 
         # (B) (선택) MediaPipe 지표
         try:
-            ar, jaw, cw, jw = compute_metrics_bgr(face_bgr)
+            ar, jaw, cw, jw, ex = compute_metrics_bgr(face_bgr, extras=True)
+            ratio = ex.get('ratio_low_mid')
         except Exception:
             ar = jaw = cw = jw = None
 
         # (C) 규칙 보정 + 재랭킹 🔧
-        if any(v is not None for v in (ar, jaw, cw, jw)):
-            adj = apply_rules(                                      # 🔧 보정 실행
-            probs, faceshape_model.class_names,
-            ar=ar, jaw_deg=jaw, cw=cw, jw=jw
-            )
-            probs_adj = adj['rule_probs']
-            top2_adj  = topk_from_probs(probs_adj, faceshape_model.class_names)
-            labels_adj = top2_strings(top2_adj)
+        from faceshape import decide_strict_with_abstain
 
-            st.subheader("모델 Top-2 (규칙 보정 후)")               # 🔧 보정 결과 표시
-            st.write(" / ".join(labels_adj))
-            final_label = adj['rule_label']                          # 🔧 최종 라벨은 보정 결과
-            reason = "rules+model"
+        final = decide_strict_with_abstain(
+            probs, faceshape_model.class_names,
+            ar=ar, jaw_deg=jaw, cw=cw, jw=jw,
+            ratio_low_mid=ratio,
+            oblong_ar_cut=1.35,      # 필요시 ±0.02~0.05 미세 튜닝
+            square_gap_hard=0.15,
+            square_ratio_min=0.83,
+            heart_jaw_max=134.0,
+            top1_min=0.55, gap_min=0.10,
+        )
+
+        if final['label'] is None:
+            st.warning("보류: " + ", ".join([f"{k}:{v}" for k,v in final['removed'].items()]))
         else:
-            # 지표가 없으면 모델 원본 유지
-            idx, final_label, reason = decide_rule_vs_top2(probs, faceshape_model.class_names)
-            st.info("지표 없음 → 보정 미적용 (model-top1)")
+            final_label = final['label']
+            st.success(f"최종: {final_label}  | kept={final['kept']}  | removed={list(final['removed'].keys())}")
 
         with st.expander("얼굴형 디버그"):
             order = np.argsort(-probs)

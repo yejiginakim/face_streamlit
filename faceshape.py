@@ -218,11 +218,108 @@ def top2_strings(items):
     return [f"{label} ({prob*100:.1f}%)" for _, label, prob in items]
 
 
+
+# ---------- 엄격 배제 + 보류 ----------
+def decide_strict_with_abstain(
+    probs, class_names,
+    # 기본 지표(필수 아님)
+    ar=None, jaw_deg=None, cw=None, jw=None,
+    # 폭 프로파일 핵심 비율 (metrics.extras['ratio_low_mid'] = w_low/w_mid)
+    ratio_low_mid=None,
+    # --- 배제 규칙 임계값 ---
+    oblong_ar_cut=1.35,      # AR < cut → Oblong 배제
+    square_gap_hard=0.15,    # |Cw-Jw|/Cw > 0.15 → Square 배제
+    square_ratio_min=0.83,   # ratio_low_mid < 0.83 → Square 배제(하부 과도하게 좁음)
+    heart_jaw_max=134.0,     # jaw_deg > 134° → Heart 배제(턱이 매우 둥글다)
+    # --- 보류(불확실) 임계값 ---
+    top1_min=0.55,           # 남은 후보 재정규화 후 top1 확률 최소치
+    gap_min=0.10,            # top1 - top2 최소 격차
+):
+    """
+    엄격 배제만 적용하고, 남은 후보들로만 확률 재정규화 → 결정.
+    불확실하면 보류(ABSTAIN)로 반환.
+
+    반환:
+      {
+        'label': str | None,           # None이면 보류
+        'kept': [남은 클래스 라벨들],
+        'removed': {라벨: '이유 문자열'},
+        'top1': (idx, label, p),
+        'top2': (idx, label, p) | None,
+        'probs': np.ndarray           # 남은 후보들의 재정규화 확률 (길이 = len(kept))
+      }
+    """
+    import numpy as np
+
+    names = list(class_names)
+    p = np.asarray(probs, dtype=np.float64)
+    p = p / np.clip(p.sum(), 1e-12, None)
+
+    kept = set(names)
+    removed = {}
+
+    def _rm(lbl, why):
+        if lbl in kept:
+            kept.remove(lbl)
+            removed[lbl] = why
+
+    # -------- 하드 배제 규칙 --------
+    # Oblong: AR 낮으면 배제
+    if (ar is not None) and (ar < oblong_ar_cut):
+        _rm('Oblong', f'AR<{oblong_ar_cut:.2f} (={float(ar):.3f})')
+
+    # Square: 폭 차이 크거나 하부폭이 과소면 배제
+    if ('Square' in kept) and (cw is not None and jw is not None):
+        gap = abs(float(cw) - float(jw)) / max(float(cw), 1e-8)
+        if gap > square_gap_hard:
+            _rm('Square', f'|Cw-Jw|/Cw>{square_gap_hard:.2f} (={gap:.3f})')
+    if ('Square' in kept) and (ratio_low_mid is not None) and (float(ratio_low_mid) < square_ratio_min):
+        _rm('Square', f'ratio_low_mid<{square_ratio_min:.2f} (={float(ratio_low_mid):.3f})')
+
+    # Heart: 턱각이 매우 크면(둥글면) 배제
+    if ('Heart' in kept) and (jaw_deg is not None) and (float(jaw_deg) > heart_jaw_max):
+        _rm('Heart', f'jaw_deg>{heart_jaw_max:.1f} (={float(jaw_deg):.2f})')
+
+    # (원한다면 Round/Oval도 별도 배제 규칙 추가 가능)
+
+    # -------- 남은 후보로만 재정규화 --------
+    kept = list(kept)
+    if not kept:
+        # 모두 배제되면 보류
+        return {'label': None, 'kept': [], 'removed': removed, 'top1': None, 'top2': None, 'probs': np.zeros(0)}
+
+    kept_idx = [names.index(k) for k in kept]
+    logits = np.log(p[kept_idx] + 1e-12)
+    logits -= logits.max()
+    q = np.exp(logits); q /= np.clip(q.sum(), 1e-12, None)
+
+    order = np.argsort(-q)
+    i1 = kept_idx[order[0]]
+    top1 = (i1, names[i1], float(q[order[0]]))
+    top2 = None
+    if len(order) > 1:
+        i2 = kept_idx[order[1]]
+        top2 = (i2, names[i2], float(q[order[1]]))
+
+    # -------- 보류 판단 --------
+    if top1[2] < top1_min:
+        return {'label': None, 'kept': kept, 'removed': removed, 'top1': top1, 'top2': top2, 'probs': q}
+    if top2 and (top1[2] - top2[2] < gap_min):
+        return {'label': None, 'kept': kept, 'removed': removed, 'top1': top1, 'top2': top2, 'probs': q}
+
+    # 확정
+    return {'label': names[i1], 'kept': kept, 'removed': removed, 'top1': top1, 'top2': top2, 'probs': q}
+
+
 __all__ = [
     "FaceShapeModel",
-    "apply_rules",          # 호환용 (보정 없음)
-    "decide_rule_vs_top2",  # 호환용 (모델 top1 고정)
+    # 선택: 소프트 보정은 실험용으로 유지
+    "apply_rules",
+    "decide_rule_vs_top2",
+    # Top-K
     "topk_from_probs",
     "top2_strings",
+    # ✅ 새 결정기(엄격 배제+보류)
+    "decide_strict_with_abstain",
 ]
 
