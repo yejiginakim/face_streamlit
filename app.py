@@ -83,7 +83,7 @@ with st.sidebar:
             return None
 
     def _qbool(name, default=False):
-        v = _get := _qget(name)
+        v = _qget(name)   # <-- 한 줄로 분리 (월러스 제거)
         if v is None:
             return default
         return str(v).lower() in ("1", "true", "yes", "on")
