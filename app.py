@@ -288,7 +288,9 @@ if faceshape_model is not None:
 
         # 4) UI
         st.subheader("최종 얼굴형 (모델+규칙)")
-        st.success(final_label)
+        top2 = topk_from_probs(probs, model.class_names, k=2)
+        labels = top2_strings(top2)
+        st.success(labels)
 
         with st.expander("얼굴형 디버그"):
             order = np.argsort(-probs)
