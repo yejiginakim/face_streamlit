@@ -1,14 +1,15 @@
-# requirements.txt (with TF on Mac)
 numpy==1.26.4
-opencv-python==4.10.0.84          # 로컬 맥은 headless 불필요(원하면 headless 써도 됨)
+opencv-python-headless==4.10.0.84; platform_system != "Darwin"
+opencv-python==4.10.0.84; platform_system == "Darwin"
 mediapipe==0.10.21
 Pillow==10.4.0
 pillow-avif-plugin==1.4.6
 streamlit==1.38.0
+huggingface_hub==0.25.2
 
-tensorflow-macos==2.13.0
-tensorflow-metal==1.1.0
+tensorflow-cpu==2.15.0.post1; platform_system != "Darwin"
+tensorflow-macos==2.13.0; platform_system == "Darwin"
+tensorflow-metal==1.1.0; platform_system == "Darwin"
+
 h5py==3.10.0
 scikit-learn==1.3.2
-protobuf==4.25.3
-huggingface_hub==0.25.2
