@@ -1,7 +1,3 @@
-from faceshape import FaceShapeModel, decide_rule_vs_top2
-
-
-
 # ---------- 반드시 최상단 1회 ----------
 import streamlit as st
 st.set_page_config(page_title="iPhone PD → 선글라스 합성 (Antena_01)", layout="wide")
@@ -83,7 +79,8 @@ with st.sidebar:
             return None
 
     def _qbool(name, default=False):
-        v = _qget(name)   # <-- 한 줄로 분리 (월러스 제거)
+        # FIX: 월러스(:=)와 일반 대입 혼용으로 생긴 SyntaxError 제거
+        v = _qget(name)
         if v is None:
             return default
         return str(v).lower() in ("1", "true", "yes", "on")
@@ -137,10 +134,6 @@ with st.sidebar:
 
     st.caption("iPhone/URL 측정값 사용: " + ("ON" if use_phone else "OFF"))
 
-    # (디버그용) 현재 상태 출력 — 문제 생기면 잠깐 열어보세요
-    # st.caption(f"DEBUG use_phone={use_phone}, PD_MM_raw={PD_MM_raw}, PD_MM={PD_MM}, CHEEK_MM={CHEEK_MM}")
-
-
 colL, colR = st.columns(2)
 with colL:
     st.markdown("### 1) 얼굴 사진 업로드")
@@ -162,10 +155,6 @@ is_sports  = 'sports'  in use_kind
 st.session_state['use_gender'] = use_gender
 st.session_state['use_kind']   = use_kind
 
-# (선택) 세션 키로도 보관
-st.session_state['use_gender'] = use_gender
-st.session_state['use_kind']   = use_kind
-
 # 5) 실행 버튼: 두 그룹 모두 최소 1개 선택돼야 활성화
 disabled = not (use_gender and use_kind)
 run = st.button('실행', disabled=disabled)
@@ -173,7 +162,6 @@ if disabled:
     st.warning('성별과 분류에서 각각 최소 1개 이상 선택하세요.')
 elif run:
     st.success(f'실행! 성별={use_gender}, 분류={use_kind}')
-    # TODO: 실제 처리 로직
     if err_msgs:
         st.error("초기 임포트 경고가 있어요. 아래 로그를 확인하세요.")
         st.code("\n".join(err_msgs), language="text")
@@ -199,7 +187,7 @@ if fg_bgra is None or dims is None:
 exists(frames)={os.path.isdir('frames')}
 exists(frames/images)={os.path.isdir('frames/images')}
 list(frames/images)[:10]={os.listdir('frames/images')[:10] if os.path.isdir('frames/images') else 'N/A'}
-glob Antena_01.*={glob.glob('frames/images/SF191SKN_004_61 .*')}
+glob Antena_01.*={glob.glob('frames/images/SF191SKN_004_61.*')}
     """, language="text")
     st.stop()
 
@@ -224,9 +212,9 @@ except Exception as e:
     st.stop()
 
 # ============================
-# ▶ 추가: 얼굴형 inference (문자열 리턴)
+# ▶ 얼굴형 inference (모델 + 규칙 결합) — 단일 블록
 # ============================
-MODEL_PATH   = "models/faceshape_best.keras"
+MODEL_PATH   = "models/faceshape_efficientnetB4_best_20251018_223855.keras"  # ✅ 네 파일명으로 고정
 CLASSES_PATH = "models/classes.txt"
 IMG_SIZE     = (224, 224)
 
@@ -241,25 +229,6 @@ else:
     faceshape_model = _load_faceshape()
 
 final_label = None
-# ============================
-# ▶ 얼굴형 inference (모델 + 규칙 결합)
-# ============================
-MODEL_PATH   = "models/faceshape_best.keras"  # 네가 학습해둔 .keras
-CLASSES_PATH = "models/classes.txt"           # 한 줄에 하나씩: Oval, Round, Square, Oblong, Heart
-IMG_SIZE     = (224, 224)
-
-@st.cache_resource
-def _load_faceshape():
-    return FaceShapeModel(MODEL_PATH, CLASSES_PATH, img_size=IMG_SIZE)
-
-if not (os.path.isfile(MODEL_PATH) and os.path.isfile(CLASSES_PATH)):
-    st.warning("※ 얼굴형 모델이 없어서 추천만 진행합니다. (models/*.keras, classes.txt 필요)")
-    faceshape_model = None
-else:
-    faceshape_model = _load_faceshape()
-
-final_label = None
-
 if faceshape_model is not None:
     try:
         # 1) 모델 확률
@@ -267,7 +236,7 @@ if faceshape_model is not None:
         probs = faceshape_model.predict_probs(pil_img)  # (C,)
         classes = faceshape_model.class_names
 
-        # 2) (선택) MediaPipe 지표 — 규칙에 사용됨. 실패해도 None 반환이라 안전.
+        # 2) (선택) MediaPipe 지표 — 실패해도 None 반환
         try:
             ar, jaw, cw, jw = compute_metrics_bgr(face_bgr)
         except Exception:
@@ -298,28 +267,12 @@ if faceshape_model is not None:
     except Exception as e:
         st.warning(f"얼굴형 추론 중 경고: {e}")
 
-
-
-    with st.expander("얼굴형 디버그"):
-        order = np.argsort(-probs)
-        st.write("모델 상위 확률:")
-        for i in order[:5]:
-            st.write(f"- {faceshape_model.class_names[i]:7s}: {probs[i]:.4f}")
-        st.write("지표:", {
-            "AR": None if ar is None else round(float(ar), 4),
-            "jaw_deg": None if jaw is None else round(float(jaw), 2),
-            "Cw": None if cw is None else round(float(cw), 2),
-            "Jw": None if jw is None else round(float(jw), 2),
-        })
-        st.caption(reason)
-
 # 다운스트림에서 쓰기 쉽게 세션에 저장
 st.session_state["faceshape_label"] = final_label
 
 # ============================
 # PD/자세/스케일/합성
 # ============================
-
 
 # ============================
 # PD 계산 (iPhone/수동/MediaPipe) + 출력
@@ -372,22 +325,13 @@ elif PD_SRC in ("iphone", "manual"):
 else:
     st.warning("PD 소스를 확인할 수 없습니다.")
 
-
-
-
 # 3) 프레임 PNG 클린업(흰 배경 제거 + 여백 트림)
 fg_bgra = vision.remove_white_to_alpha(fg_bgra, thr=240)
 fg_bgra = vision.trim_transparent(fg_bgra, pad=8)
 
-
-
-# ========= 스케일 & 위치 계산 (교체 블록) =========
+# ========= 스케일 & 위치 계산 =========
 
 h_face, w_face = face_bgr.shape[:2]
-
-# 프레임 클린업(유지)
-fg_bgra = vision.remove_white_to_alpha(fg_bgra, thr=240)
-fg_bgra = vision.trim_transparent(fg_bgra, pad=8)
 
 # 프레임의 초기 치수
 h0, w0 = fg_bgra.shape[:2]
@@ -448,7 +392,7 @@ fg_rot = cv2.warpAffine(
 )
 
 # 7) 위치 – PD 중점 기준(있으면), 없으면 중앙
-pitch_deg = pitch if pitch is not None else 0.0
+pitch_deg = pitch if 'pitch' in locals() and pitch is not None else 0.0
 pitch_dy  = int(pitch_deg * 0.8)
 
 if mid == (0, 0):  # iPhone 모드(중점 없음)
@@ -458,14 +402,6 @@ else:               # MediaPipe 모드(눈 중점 기준)
     anchor = 0.50   # 렌즈 중앙 기준 정렬(0.45~0.55로 미세조정)
     gx = int(mid[0] - fg_rot.shape[1] * anchor) + dx
     gy = int(mid[1] - fg_rot.shape[0] * 0.50) + dy + pitch_dy
-
-# ========= 스케일 & 위치 계산 (교체 블록 끝) =========
-
-
-
-
-
-
 
 # 8) 합성 전: 여백 확보 (잘림 방지)
 h_bg, w_bg = face_bgr.shape[:2]
@@ -510,5 +446,4 @@ if final_label:
 
     if rec:
         st.info(f"👓 얼굴형({final_label}) 추천: {rec}")
-
 
