@@ -1,5 +1,7 @@
 # ---------- 반드시 최상단 1회 ----------
 # --- Keras 백엔드 고정: 반드시 모든 import 이전 ---
+
+
 import os
 os.environ.setdefault("KERAS_BACKEND", "tensorflow")
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"   # (선택) TF 로그 줄이기
