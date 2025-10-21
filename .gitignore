@@ -15,3 +15,15 @@ models/*.pt
 # local backups
 faceshape_local_backup.py
 requirements_local_backup.txt
+# macOS
+.DS_Store
+
+# local backups
+faceshape_local_backup.py
+requirements_local_backup.txt
+
+# large model artifacts
+models/*.keras
+models/*.h5
+models/*.zip
+models/*.pt
