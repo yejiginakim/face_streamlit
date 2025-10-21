@@ -1,1 +1,7 @@
 .DS_Store
+
+# model artifacts (large)
+models/*.keras
+models/*.h5
+models/*.zip
+models/*.pt
