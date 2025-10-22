@@ -153,6 +153,47 @@ def pick_with_veto(
         'mode': 'fallback_to_model_top1_all_vetoed'
     }
 
+# --- 호환용: 과거 시그니처 유지용 apply_rules (Hard VETO 기반) ---
+def apply_rules(
+    probs, class_names,
+    ar=None, jaw_deg=None, cw=None, jw=None,
+    **kwargs
+):
+    """
+    과거 코드 호환을 위한 간단 셈:
+    - Hard VETO 기준에 걸린 클래스 확률을 0으로 만든 뒤 재정규화
+    - 전부 VETO되면 원본 확률로 폴백
+    반환 형식은 예전과 동일: {'rule_idx','rule_label','rule_probs'}
+    """
+    p = np.asarray(probs, dtype=np.float64)
+    p = p / np.clip(p.sum(), 1e-12, None)
+
+    q = p.copy()
+    for i, label in enumerate(class_names):
+        ok, _ = _veto_check(
+            label,
+            ar=ar, jaw_deg=jaw_deg, cw=cw, jw=jw,
+            square_gap_hard=kwargs.get('square_gap_hard', 0.15),
+            oblong_ar_min=kwargs.get('oblong_ar_min', 1.35),
+            heart_jaw_hi=kwargs.get('heart_jaw_hi', 135.0),
+            enable_heart_veto=kwargs.get('enable_heart_veto', False),
+        )
+        if not ok:
+            q[i] = 0.0
+
+    s = float(q.sum())
+    if s > 0:
+        q = q / s
+    else:
+        # 모두 제외 → 원본 확률로 폴백
+        q = p
+
+    rule_top = int(np.argmax(q))
+    return {
+        'rule_idx': rule_top,
+        'rule_label': class_names[rule_top],
+        'rule_probs': q
+    }
 
 # =========================
 # 4) 최종 의사결정 래퍼 (호환)
@@ -225,5 +266,6 @@ __all__ = [
     'pick_with_veto',
     'decide_final',
     'decide_rule_vs_top2',  # 호환용
+    'apply_rules', 
 ]
 
