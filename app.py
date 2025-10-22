@@ -307,7 +307,8 @@ from pathlib import Path
 
 
 
-ROOT = Path(__file__).resolve().parent
+
+ROOT = Path.cwd()
 EXCEL_PATH = ROOT / 'sunglass_df_test.xlsx'   # ✅ face_streamlit/sunglass_df.xlsx
 
 
@@ -406,11 +407,29 @@ if not img_path:
     st.error(f"이미지 파일을 찾을 수 없습니다: frames/images/{row['product_id']}.[png|webp|avif|jpg]")
     st.stop()
 
+
+
 # 7) 프레임 이미지 로드 (BGRA 보장)
-fg_bgra = vision.ensure_bgra(img_path)
+def _ensure_bgra_fallback(p: str):
+    img = cv2.imread(p, cv2.IMREAD_UNCHANGED)
+    if img is None:
+        return None
+    if img.shape[2] == 3:
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2BGRA)
+    return img
+
+try:
+    fg_bgra = vision.ensure_bgra(img_path)  # vision에 있으면 이걸 씀
+    if fg_bgra is None:
+        raise RuntimeError("vision.ensure_bgra returned None")
+except Exception:
+    fg_bgra = _ensure_bgra_fallback(img_path)
+
 if fg_bgra is None:
     st.error(f"프레임 이미지를 읽을 수 없습니다: {img_path}")
     st.stop()
+
+
 
 # 8) 치수 세팅
 A, DBL, TOTAL = float(row["lens_mm"]), float(row["bridge_mm"]), float(row["total_mm"])
@@ -426,6 +445,7 @@ st.caption(
 
 
 # =============================
+# =============================
 # 8) PD/자세/스케일/합성
 # =============================
 pd_px   = None
@@ -433,11 +453,12 @@ mid     = (0, 0)
 eye_roll_deg = 0.0
 PD_SRC  = None  # 'iphone' | 'manual' | 'mediapipe' | None
 
-if (PD_MM is not None) and (PD_MM > 0):
-    PD_SRC = "manual"
-elif use_phone and (PD_MM_raw is not None):
+# ⚠️ 순서 중요: iPhone -> 수동 -> MediaPipe
+if use_phone and (PD_MM_raw is not None) and (PD_MM_raw > 0):
     PD_SRC = "iphone"
     PD_MM  = PD_MM_raw
+elif (PD_MM is not None) and (PD_MM > 0):
+    PD_SRC = "manual"
 else:
     try:
         pd_px, eye_roll_deg, mid = vision.detect_pd_px(face_bgr)
