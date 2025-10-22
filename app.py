@@ -300,7 +300,7 @@ st.session_state["faceshape_label"] = final_label
 import os, random
 import pandas as pd
 
-EXCEL_PATH = "/Users/yeji_kim/Desktop/itwill_final_project/sunglass_df.xlsx"  # 카탈로그 경로
+EXCEL_PATH = "/Users/yeji_kim/Desktop/itwill_final_project/face_streamlit/sunglass_df.xlsx"  # 카탈로그 경로
 
 # 6개 모양 고정
 SHAPES6 = {"round","rectangular","trapezoid","aviator","cat-eye","shield"}
