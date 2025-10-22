@@ -443,8 +443,6 @@ st.caption(
     f"(GCD={GCD}, k=TOTAL/GCD={k:.3f})"
 )
 
-
-# =============================
 # =============================
 # 8) PD/자세/스케일/합성
 # =============================
@@ -453,23 +451,23 @@ mid     = (0, 0)
 eye_roll_deg = 0.0
 PD_SRC  = None  # 'iphone' | 'manual' | 'mediapipe' | None
 
-# ⚠️ 순서 중요: iPhone -> 수동 -> MediaPipe
-if use_phone and (PD_MM_raw is not None) and (PD_MM_raw > 0):
+# 8-1) PD 소스 결정 (실패해도 중단하지 않음)
+if (PD_MM is not None) and (PD_MM > 0):
+    PD_SRC = "manual"
+elif use_phone and (PD_MM_raw is not None):
     PD_SRC = "iphone"
     PD_MM  = PD_MM_raw
-elif (PD_MM is not None) and (PD_MM > 0):
-    PD_SRC = "manual"
 else:
     try:
         pd_px, eye_roll_deg, mid = vision.detect_pd_px(face_bgr)
-        if pd_px is None:
-            raise RuntimeError("눈 검출 실패")
-        PD_SRC = "mediapipe"
+        PD_SRC = "mediapipe" if pd_px is not None else None
+        if PD_SRC is None:
+            st.warning("눈 검출 실패 → PD 없이 진행합니다.")
     except Exception as e:
         PD_SRC = None
-        st.error(f"MediaPipe PD 계산 실패: {e}")
-        st.stop()
+        st.warning(f"MediaPipe PD 계산 실패({e}) → PD 없이 진행합니다.")
 
+# 8-2) 머리자세(없어도 진행)
 yaw = pitch = roll = None
 if hasattr(vision, "head_pose_ypr"):
     try:
@@ -479,6 +477,7 @@ if hasattr(vision, "head_pose_ypr"):
 if roll is None:
     roll = eye_roll_deg
 
+# 8-3) 디버그 표기
 if PD_SRC == "mediapipe":
     st.write(
         f"**PD_px**: {pd_px:.2f} px  /  "
@@ -489,14 +488,16 @@ elif PD_SRC in ("iphone", "manual"):
     tag = "iPhone 측정값" if PD_SRC == "iphone" else "수동 입력"
     st.write(f"**PD(mm)**: {PD_MM:.2f} mm ({tag})  /  **roll**: {roll:.2f}°")
 else:
-    st.warning("PD 소스를 확인할 수 없습니다.")
+    st.caption("PD 미사용: 프레임 총폭과 얼굴 폭으로 스케일 맞춥니다.")
 
+# 8-4) 프레임 전처리
 fg_bgra = vision.remove_white_to_alpha(fg_bgra, thr=240)
 fg_bgra = vision.trim_transparent(fg_bgra, pad=8)
 
 h_face, w_face = face_bgr.shape[:2]
 h0, w0 = fg_bgra.shape[:2]
 
+# 8-5) 목표 스케일 계산 (PD 있으면 GCD 기반, 없으면 TOTAL↔CHEEK_MM 기반)
 GCD2PD_CAL = 0.92
 target_GCD_px = None
 if pd_px is not None:
@@ -506,15 +507,16 @@ elif PD_MM:
     target_GCD_px = PD_MM / max(mm_per_px, 1e-6)
 
 Cw_px = vision.cheek_width_px(face_bgr)  # None일 수 있음
-frame_GCD_px0 = w0 / max(k, 1e-6)
 
 if target_GCD_px is not None:
     target_GCD_px *= GCD2PD_CAL
-    target_total_px = target_GCD_px * k
+    target_total_px = target_GCD_px * k  # k = TOTAL/GCD (섹션 #5에서 계산됨)
 else:
+    # PD 없이도 동작: 얼굴폭↔mm 비율로 TOTAL을 픽셀로 환산
     mm_per_px = CHEEK_MM / max(w_face, 1e-6)
     target_total_px = TOTAL / max(mm_per_px, 1e-6)
 
+# 안전 범위 클램프
 min_w = 0.60 * w_face
 max_w = 0.95 * w_face
 if Cw_px is not None:
@@ -522,6 +524,7 @@ if Cw_px is not None:
     max_w = min(max_w, 0.98 * Cw_px)
 target_total_px = float(np.clip(target_total_px, min_w, max_w))
 
+# 8-6) 리사이즈/회전
 scale = (target_total_px / max(w0, 1)) * float(scale_mult)
 scale = float(np.clip(scale, 0.35, 2.2))
 
@@ -534,6 +537,7 @@ fg_rot = cv2.warpAffine(
     flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=(0,0,0,0)
 )
 
+# 8-7) 위치 앵커
 pitch_deg = pitch if pitch is not None else 0.0
 pitch_dy  = int(pitch_deg * 0.8)
 
@@ -545,6 +549,7 @@ else:
     gx = int(mid[0] - fg_rot.shape[1] * anchor) + dx
     gy = int(mid[1] - fg_rot.shape[0] * 0.50) + dy + pitch_dy
 
+# 8-8) 합성
 h_bg, w_bg = face_bgr.shape[:2]
 margin_x, margin_y = 300, 150
 bg_expanded = cv2.copyMakeBorder(
@@ -558,29 +563,23 @@ gy_expanded = gy + margin_y
 out = vision.overlay_rgba(bg_expanded, fg_rot, gx_expanded, gy_expanded)
 show_image_bgr(out, caption="합성 결과")
 
+# 8-9) 다운로드 파일명: 선택 프레임 정보가 있으면 반영
 try:
     from io import BytesIO
     rgb = cv2.cvtColor(out, cv2.COLOR_BGR2RGB)
     buf = BytesIO()
     PIL.Image.fromarray(rgb).save(buf, format="PNG")
+
+    # 선택 프레임 row가 있으면 파일명에 브랜드/ID 반영
+    fname = "result.png"
+    if 'row' in locals() and isinstance(row, dict):
+        b = str(row.get("brand", "frame")).strip().replace(" ", "_")
+        pid = str(row.get("product_id", "")).strip()
+        fname = f"{b}_{pid}.png" if pid else f"{b}.png"
+
     st.download_button("결과 PNG 다운로드", data=buf.getvalue(),
-                       file_name="SF191SKN_004_61.png", mime="image/png")
+                       file_name=fname, mime="image/png")
 except Exception as e:
     st.warning(f"다운로드 준비 중 경고: {e}")
 
-if final_label:
-    rec = None
-    if final_label == "Oval":
-        rec = "대부분의 프레임 OK (aviator/wayfarer/스퀘어/원형)"
-    elif final_label == "Round":
-        rec = "각진 프레임 추천 (스퀘어/레트로 스퀘어)"
-    elif final_label == "Square":
-        rec = "곡선형 프레임 추천 (원형/오벌/보스턴)"
-    elif final_label == "Oblong":
-        rec = "세로를 낮추고 가로가 긴 타입 (wayfarer/클럽마스터)"
-    elif final_label == "Heart":
-        rec = "하부가 살짝 넓은 오벌/보스턴, 얇은 메탈 림"
-
-    if rec:
-        st.info(f"👓 얼굴형({final_label}) 추천: {rec}")
-
+# (선택) 얼굴형 텍스트 추천은 합성 이전/추천 카드 옆에 두는게 UX상 자연스러움
