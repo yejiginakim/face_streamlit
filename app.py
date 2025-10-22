@@ -308,7 +308,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parent
-EXCEL_PATH = ROOT / 'sunglass_df.xlsx'   # ✅ face_streamlit/sunglass_df.xlsx
+EXCEL_PATH = ROOT / 'sunglass_df_test.xlsx'   # ✅ face_streamlit/sunglass_df.xlsx
 
 
 # 6개 모양 고정
@@ -335,7 +335,7 @@ except Exception as e:
     st.stop()
 
 # 1) 필수 컬럼 체크
-need_cols = ["product_id","brand","shape","purpose","sex","lens","bridc","total_r"]
+need_cols = ["product_id","brand","shape","purpose","sex","lens_mm","bridge_mm","total_mm"]
 for c in need_cols:
     if c not in df.columns:
         st.error(f"엑셀에 '{c}' 컬럼이 없습니다.")
@@ -345,7 +345,7 @@ for c in need_cols:
 df["shape"]   = df["shape"].astype(str).str.strip().str.lower()
 df["purpose"] = df["purpose"].astype(str).str.strip().str.lower()   # fashion/sports
 df["sex"]     = df["sex"].astype(str).str.strip().str.lower()       # male/female/unisex
-for c in ["lens","bridc","total_r"]:
+for c in ["lens_mm","bridge_mm","total_mm"]:
     df[c] = pd.to_numeric(df[c], errors="coerce")
 
 bad = df.loc[~df["shape"].isin(SHAPES6), ["product_id","brand","shape"]]
@@ -413,7 +413,7 @@ if fg_bgra is None:
     st.stop()
 
 # 8) 치수 세팅
-A, DBL, TOTAL = float(row["lens"]), float(row["bridc"]), float(row["total_r"])
+A, DBL, TOTAL = float(row["lens_mm"]), float(row["bridge_mm"]), float(row["total_mm"])
 dims = (A, DBL, TOTAL)
 GCD = A + DBL
 k = (TOTAL / GCD) if GCD else 2.0
