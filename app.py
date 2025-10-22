@@ -14,6 +14,9 @@ import tensorflow as tf
 import keras
 import cv2
 import PIL
+import random
+import pandas as pd
+from pathlib import Path
 
 print("NumPy:", np.__version__)
 print("TF:", tf.__version__)
@@ -23,7 +26,7 @@ print("Pillow:", PIL.__version__)
 
 # Streamlit
 import streamlit as st
-st.set_page_config(page_title="iPhone PD → 선글라스 합성 (Antena_01)", layout="wide")
+st.set_page_config(page_title="iPhone PD → 선글라스 합성", layout="wide")
 
 # 시스템 정보
 import sys, platform, glob
@@ -33,13 +36,11 @@ st.caption(f"Python: {sys.version.split()[0]} / Arch: {platform.machine()} / CWD
 # 2) faceshape / vision / metrics 임포트 (이 시점!)
 # =============================
 err_msgs = []
-
 try:
-    # faceshape는 KERAS_BACKEND 고정 후에 임포트해야 안전
     from faceshape import (
         FaceShapeModel,
         apply_rules,
-        decide_rule_vs_top2,   # 쓰지 않으려면 임포트 안 해도 됨
+        decide_rule_vs_top2,
         topk_from_probs,
         top2_strings,
     )
@@ -47,7 +48,7 @@ except Exception as e:
     err_msgs.append(f"faceshape 임포트 실패: {e}")
 
 try:
-    import vision  # vision.py: detect_pd_px / load_fixed_antena / overlay_rgba / ...
+    import vision  # detect_pd_px / head_pose_ypr / ensure_bgra / ...
 except Exception as e:
     err_msgs.append(f"vision 임포트 실패: {e}")
 
@@ -72,10 +73,13 @@ def show_image_bgr(img_bgr, **kwargs):
     except Exception as e:
         st.error(f"이미지 표시 중 오류: {e}")
 
+def _norm(x):
+    return (x or "").strip().lower()
+
 # =============================
 # 4) UI
 # =============================
-st.title("🧍→🕶️ Antena_01 합성 (GCD 앵커) — 안전모드")
+st.title("🧍→🕶️ 선글라스 합성 (얼굴형 기반 추천)")
 
 with st.sidebar:
     st.subheader("📱 iPhone/URL 측정값")
@@ -139,8 +143,6 @@ with st.sidebar:
     dy = st.slider("수직 오프셋(px)", -200, 200, 0)
     scale_mult = st.slider("스케일 보정(배)", 0.8, 1.2, 1.0)
 
-    st.caption("iPhone/URL 측정값 사용: " + ("ON" if use_phone else "OFF"))
-
 colL, colR = st.columns(2)
 with colL:
     st.markdown("### 1) 얼굴 사진 업로드")
@@ -151,56 +153,41 @@ with colR:
     use_gender = st.multiselect('성별', ['female', 'male', 'unisex'], placeholder='선택하세요')
     use_kind = st.multiselect('분류', ['fashion', 'sports'], placeholder='선택하세요')
 
-is_female = 'female' in use_gender
-is_male   = 'male'   in use_gender
-is_unisex = 'unisex' in use_gender
-is_fashion = 'fashion' in use_kind
-is_sports  = 'sports'  in use_kind
-
 st.session_state['use_gender'] = use_gender
 st.session_state['use_kind']   = use_kind
 
 disabled = not (use_gender and use_kind)
-run = st.button('실행', disabled=disabled)
-if disabled:
-    st.warning('성별과 분류에서 각각 최소 1개 이상 선택하세요.')
-elif run:
-    st.success(f'실행! 성별={use_gender}, 분류={use_kind}')
-    if err_msgs:
-        st.error("초기 임포트 경고가 있어요. 아래 로그를 확인하세요.")
-        st.code("\n".join(err_msgs), language="text")
+clicked = st.button('실행', disabled=disabled)
+if clicked:
+    st.session_state['started'] = True
 
 if err_msgs:
-    st.info("위 임포트 문제를 해결해야 합성이 진행됩니다. (requirements.txt / OpenCV headless / vision.py / faceshape.py / metrics.py 확인)")
-    st.stop()
+    st.error("초기 임포트 경고가 있어요. 아래 로그를 확인하세요.")
+    st.code("\n".join(err_msgs), language="text")
 
 st.divider()
-# 실행 버튼 누르기 전에는 아무 것도 진행하지 않음
-if not run:
+if not st.session_state.get('started', False):
     st.info("성별/분류를 선택하고 '실행'을 누르면 얼굴형 분석과 추천이 시작됩니다.")
     st.stop()
 
-
-
-
 # =============================
-# 6) 얼굴 이미지 업로드
+# 6) 얼굴 이미지 업로드 (세션에 보관)
 # =============================
-if not img_file:
-    st.info("얼굴 사진을 업로드하면 합성을 시작합니다.")
+if not img_file and 'face_bytes' not in st.session_state:
+    st.info("얼굴 사진을 업로드하면 시작합니다.")
     st.stop()
 
-try:
-    file_bytes = np.frombuffer(img_file.read(), dtype=np.uint8)
-    face_bgr = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
-    if face_bgr is None:
-        raise RuntimeError("OpenCV가 이미지를 디코드하지 못함")
-except Exception as e:
-    st.error(f"얼굴 이미지 로드 실패: {e}")
+if img_file is not None:
+    st.session_state['face_bytes'] = img_file.getvalue()
+
+file_bytes = np.frombuffer(st.session_state['face_bytes'], dtype=np.uint8)
+face_bgr = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
+if face_bgr is None:
+    st.error("얼굴 이미지 디코딩 실패(파일 형식/손상 확인).")
     st.stop()
 
 # =============================
-# 7) 얼굴형 모델 로드
+# 7) 얼굴형 모델 로드 → 얼굴형 추론
 # =============================
 MODEL_PATH   = "models/faceshape_efficientnetB4_best_20251018_223855.keras"
 CLASSES_PATH = "models/classes_20251018_223855.txt"
@@ -212,10 +199,8 @@ def _load_faceshape():
 
 def _is_lfs_pointer(path:str)->bool:
     try:
-        if not os.path.isfile(path):
-            return False
-        if os.path.getsize(path) > 2048:
-            return False
+        if not os.path.isfile(path): return False
+        if os.path.getsize(path) > 2048: return False
         with open(path, "rb") as f:
             head = f.read(256)
         return (b"git-lfs" in head) or (b"github.com/spec" in head)
@@ -228,94 +213,56 @@ if not os.path.isfile(MODEL_PATH):
 elif not os.path.isfile(CLASSES_PATH):
     st.warning("※ classes.txt 파일이 없습니다. (models/classes*.txt 필요)")
 elif _is_lfs_pointer(MODEL_PATH):
-    st.error("모델 파일이 Git LFS 포인터로 보입니다. Releases/S3 등에서 **실제 바이너리**를 받아오세요.")
+    st.error("모델 파일이 Git LFS 포인터 같습니다. 실제 바이너리를 배치하세요.")
 else:
     try:
         faceshape_model = _load_faceshape()
     except Exception as e:
-        st.error("얼굴형 모델 로드 실패 — 모델 없이 추천은 스킵하고 합성만 진행합니다.")
+        st.error("얼굴형 모델 로드 실패 — 모델 없이 추천은 스킵합니다.")
         st.exception(e)
         faceshape_model = None
 
 final_label = None
 if faceshape_model is not None:
     try:
-        # (A) 모델 확률 (보정 없이 Top-2만 표시)
         pil_img = PIL.Image.fromarray(cv2.cvtColor(face_bgr, cv2.COLOR_BGR2RGB))
-        probs = faceshape_model.predict_probs(pil_img)                # ← faceshape_model 사용
-        top2_raw = topk_from_probs(probs, faceshape_model.class_names)    # 원본
+        probs = faceshape_model.predict_probs(pil_img)
+        top2_raw = topk_from_probs(probs, faceshape_model.class_names)
         labels_raw = top2_strings(top2_raw)
-
         st.subheader("모델 Top-2 (원본)")
         st.write(" / ".join(labels_raw))
 
-        # (B) (선택) MediaPipe 지표
+        # (선택) MediaPipe 지표
         try:
             ar, jaw, cw, jw = compute_metrics_bgr(face_bgr)
         except Exception:
             ar = jaw = cw = jw = None
 
-        # (C) 규칙 보정 + 재랭킹 🔧
         if any(v is not None for v in (ar, jaw, cw, jw)):
-            adj = apply_rules(                                      # 🔧 보정 실행
-            probs, faceshape_model.class_names,
-            ar=ar, jaw_deg=jaw, cw=cw, jw=jw
-            )
+            adj = apply_rules(probs, faceshape_model.class_names, ar=ar, jaw_deg=jaw, cw=cw, jw=jw)
             probs_adj = adj['rule_probs']
             top2_adj  = topk_from_probs(probs_adj, faceshape_model.class_names)
             labels_adj = top2_strings(top2_adj)
-
-            st.subheader("모델 Top-2 (규칙 보정 후)")               # 🔧 보정 결과 표시
+            st.subheader("모델 Top-2 (규칙 보정 후)")
             st.write(" / ".join(labels_adj))
-            final_label = adj['rule_label']                          # 🔧 최종 라벨은 보정 결과
-            reason = "rules+model"
+            final_label = adj['rule_label']
         else:
-            # 지표가 없으면 모델 원본 유지
-            idx, final_label, reason = decide_rule_vs_top2(probs, faceshape_model.class_names)
+            _, final_label, _ = decide_rule_vs_top2(probs, faceshape_model.class_names)
             st.info("지표 없음 → 보정 미적용 (model-top1)")
-
-        with st.expander("얼굴형 디버그"):
-            order = np.argsort(-probs)
-            st.write("모델 상위 확률(원본):")
-            for i in order[:min(5, len(probs))]:
-                st.write(f"- {faceshape_model.class_names[i]:7s}: {probs[i]:.4f}")
-            st.write("지표:", {
-                "AR": None if ar is None else round(float(ar), 4),
-                "jaw_deg": None if jaw is None else round(float(jaw), 2),
-                "Cw": None if cw is None else round(float(cw), 2),
-                "Jw": None if jw is None else round(float(jw), 2),
-            })
-            st.caption(reason)
     except Exception as e:
-        st.warning("얼굴형 추론 중 경고가 발생했습니다. 아래 상세를 확인하세요.")
+        st.warning("얼굴형 추론 중 경고가 발생했습니다.")
         st.exception(e)
 
 st.session_state["faceshape_label"] = final_label
 
-
-
 # =============================
-# 5) 프레임 로드 (엑셀 카탈로그 · 최소 규칙 + sports시 shield)
+# 5) 프레임 로드 (엑셀 · 최소 규칙 + sports 시 shield)
 # =============================
-import os, random
-import pandas as pd
-from pathlib import Path
-
-
-
-
-
-
-
-
 ROOT = Path.cwd()
-EXCEL_PATH = ROOT / 'sunglass_df_test.xlsx'   # ✅ face_streamlit/sunglass_df.xlsx
+EXCEL_PATH = ROOT / "sunglass_df_test.xlsx"   # ← 네 엑셀 경로
 
-
-# 6개 모양 고정
 SHAPES6 = {"round","rectangular","trapezoid","aviator","cat-eye","shield"}
 
-# 얼굴형 → 최소 추천 모양(우선순위)
 FRAME_RULES_ORDERED = {
     "Oval":   ["trapezoid","rectangular"],
     "Round":  ["rectangular"],
@@ -323,10 +270,7 @@ FRAME_RULES_ORDERED = {
     "Oblong": ["rectangular","trapezoid"],
     "Heart":  ["cat-eye","round"],
 }
-MAX_SHAPES_PER_FACE = 1   # 너무 많지 않게 1개만 (원하면 2로)
-
-def _norm(x):
-    return (x or "").strip().lower()
+MAX_SHAPES_PER_FACE = 1   # 필요시 2로
 
 # 0) 엑셀 로드
 try:
@@ -335,7 +279,7 @@ except Exception as e:
     st.error(f"엑셀 카탈로그 로드 실패: {e}")
     st.stop()
 
-# 1) 필수 컬럼 체크
+# 1) 필수 컬럼 체크 (lens_mm / bridge_mm / total_mm 사용)
 need_cols = ["product_id","brand","shape","purpose","sex","lens_mm","bridge_mm","total_mm"]
 for c in need_cols:
     if c not in df.columns:
@@ -352,12 +296,11 @@ for c in ["lens_mm","bridge_mm","total_mm"]:
 bad = df.loc[~df["shape"].isin(SHAPES6), ["product_id","brand","shape"]]
 if len(bad) > 0:
     st.error("shape 값은 round/rectangular/trapezoid/aviator/cat-eye/shield 만 허용됩니다.")
-    st.dataframe(bad)
-    st.stop()
+    st.dataframe(bad); st.stop()
 
-# 3) 성별/분류 1차 필터
-gset = {_norm(g) for g in use_gender}
-kset = {_norm(k) for k in use_kind}
+# 3) 성별/분류 필터
+gset = {_norm(g) for g in st.session_state['use_gender']}
+kset = {_norm(k) for k in st.session_state['use_kind']}
 
 f = pd.Series([True] * len(df))
 if gset:
@@ -367,18 +310,14 @@ if kset:
 
 cand = df[f].copy()
 
-# 4) 얼굴형 최소 규칙 + sports면 shield 조건부 추가
+# 4) 얼굴형 최소 규칙 + sports면 shield 추가(제한)
 label = st.session_state.get("faceshape_label", final_label)
-
 if label in FRAME_RULES_ORDERED:
     ok_shapes = list(FRAME_RULES_ORDERED[label][:MAX_SHAPES_PER_FACE])
-
-    # sports 선택 시, 일부 얼굴형에 한해 shield 추가 (최대 2유형로 제한)
     if 'sports' in kset and 'shield' not in ok_shapes:
-        if label in ('Oval','Round','Oblong'):   # 필요하면 얼굴형 추가 가능
+        if label in ('Oval','Round','Oblong'):   # 필요시 추가 확장 가능
             ok_shapes.append('shield')
             ok_shapes = ok_shapes[:2]
-
     pool = cand[cand["shape"].isin(set(ok_shapes))]
     if len(pool) > 0:
         cand = pool
@@ -390,12 +329,13 @@ if len(cand) == 0:
 # 5) 후보 중 랜덤 1개 선택
 row = cand.sample(1, random_state=random.randint(0, 10_000)).iloc[0].to_dict()
 
-# 6) 이미지 경로 결정: image_path 우선, 없으면 product_id.* 탐색
+# 6) 이미지 경로 결정
 def _resolve_image(row: dict):
     p = (row.get("image_path") or "").strip()
     if p and os.path.exists(p):
         return p
-    base = os.path.join("frames","images", str(row["product_id"]).strip())
+    pid = str(row.get("product_id", "")).strip()
+    base = os.path.join("frames","images", pid)
     for ext in (".png",".webp",".avif",".jpg",".jpeg"):
         cp = base + ext
         if os.path.exists(cp):
@@ -404,22 +344,20 @@ def _resolve_image(row: dict):
 
 img_path = _resolve_image(row)
 if not img_path:
-    st.error(f"이미지 파일을 찾을 수 없습니다: frames/images/{row['product_id']}.[png|webp|avif|jpg]")
+    st.error(f"이미지 파일을 찾을 수 없습니다: frames/images/{row.get('product_id','?')}.[png|webp|avif|jpg]")
     st.stop()
-
-
 
 # 7) 프레임 이미지 로드 (BGRA 보장)
 def _ensure_bgra_fallback(p: str):
     img = cv2.imread(p, cv2.IMREAD_UNCHANGED)
     if img is None:
         return None
-    if img.shape[2] == 3:
+    if img.ndim == 3 and img.shape[2] == 3:
         img = cv2.cvtColor(img, cv2.COLOR_BGR2BGRA)
     return img
 
 try:
-    fg_bgra = vision.ensure_bgra(img_path)  # vision에 있으면 이걸 씀
+    fg_bgra = vision.ensure_bgra(img_path)
     if fg_bgra is None:
         raise RuntimeError("vision.ensure_bgra returned None")
 except Exception:
@@ -429,14 +367,15 @@ if fg_bgra is None:
     st.error(f"프레임 이미지를 읽을 수 없습니다: {img_path}")
     st.stop()
 
-
-
 # 8) 치수 세팅
 A, DBL, TOTAL = float(row["lens_mm"]), float(row["bridge_mm"]), float(row["total_mm"])
+if any(pd.isna([A, DBL, TOTAL])):
+    st.error("선택된 프레임의 치수(lens_mm/bridge_mm/total_mm)가 비어 있습니다.")
+    st.stop()
+
 dims = (A, DBL, TOTAL)
 GCD = A + DBL
 k = (TOTAL / GCD) if GCD else 2.0
-
 st.caption(
     f"선택 프레임: {row.get('brand','')} / {row.get('product_id','')}  · "
     f"shape={row.get('shape','?')} · A={A}, DBL={DBL}, TOTAL={TOTAL} "
@@ -455,8 +394,7 @@ PD_SRC  = None  # 'iphone' | 'manual' | 'mediapipe' | None
 if (PD_MM is not None) and (PD_MM > 0):
     PD_SRC = "manual"
 elif use_phone and (PD_MM_raw is not None):
-    PD_SRC = "iphone"
-    PD_MM  = PD_MM_raw
+    PD_SRC = "iphone"; PD_MM = PD_MM_raw
 else:
     try:
         pd_px, eye_roll_deg, mid = vision.detect_pd_px(face_bgr)
@@ -510,9 +448,8 @@ Cw_px = vision.cheek_width_px(face_bgr)  # None일 수 있음
 
 if target_GCD_px is not None:
     target_GCD_px *= GCD2PD_CAL
-    target_total_px = target_GCD_px * k  # k = TOTAL/GCD (섹션 #5에서 계산됨)
+    target_total_px = target_GCD_px * k  # k = TOTAL/GCD
 else:
-    # PD 없이도 동작: 얼굴폭↔mm 비율로 TOTAL을 픽셀로 환산
     mm_per_px = CHEEK_MM / max(w_face, 1e-6)
     target_total_px = TOTAL / max(mm_per_px, 1e-6)
 
@@ -563,23 +500,41 @@ gy_expanded = gy + margin_y
 out = vision.overlay_rgba(bg_expanded, fg_rot, gx_expanded, gy_expanded)
 show_image_bgr(out, caption="합성 결과")
 
-# 8-9) 다운로드 파일명: 선택 프레임 정보가 있으면 반영
+# 8-9) 다운로드
 try:
     from io import BytesIO
     rgb = cv2.cvtColor(out, cv2.COLOR_BGR2RGB)
     buf = BytesIO()
     PIL.Image.fromarray(rgb).save(buf, format="PNG")
-
-    # 선택 프레임 row가 있으면 파일명에 브랜드/ID 반영
-    fname = "result.png"
-    if 'row' in locals() and isinstance(row, dict):
-        b = str(row.get("brand", "frame")).strip().replace(" ", "_")
-        pid = str(row.get("product_id", "")).strip()
-        fname = f"{b}_{pid}.png" if pid else f"{b}.png"
-
-    st.download_button("결과 PNG 다운로드", data=buf.getvalue(),
-                       file_name=fname, mime="image/png")
+    b = str(row.get("brand", "frame")).strip().replace(" ", "_")
+    pid = str(row.get("product_id", "")).strip()
+    fname = f"{b}_{pid}.png" if pid else f"{b}.png"
+    st.download_button("결과 PNG 다운로드", data=buf.getvalue(), file_name=fname, mime="image/png")
 except Exception as e:
     st.warning(f"다운로드 준비 중 경고: {e}")
 
-# (선택) 얼굴형 텍스트 추천은 합성 이전/추천 카드 옆에 두는게 UX상 자연스러움
+# =============================
+# 9) (선택) 얼굴형 텍스트 추천
+# =============================
+if final_label:
+    rec = None
+    if final_label == "Oval":
+        rec = "대부분의 프레임 OK (rectangular/trapezoid/aviator)"
+    elif final_label == "Round":
+        rec = "각진 프레임 추천 (rectangular/wayfarer 계열)"
+    elif final_label == "Square":
+        rec = "곡선형 프레임 추천 (round/aviator)"
+    elif final_label == "Oblong":
+        rec = "가로 비중 높은 타입 (rectangular/trapezoid)"
+    elif final_label == "Heart":
+        rec = "상단 가벼운 실루엣 (cat-eye/round)"
+    if rec:
+        st.info(f"👓 얼굴형({final_label}) 추천: {rec}")
+
+# (옵션) 다시 시작 버튼
+with st.sidebar:
+    if st.button("🔄 다시 시작"):
+        for k in ("started","face_bytes"):
+            st.session_state.pop(k, None)
+        st.rerun()
+
