@@ -17,3 +17,4 @@ mediapipe==0.10.14
 # protobuf==4.25.3
 pandas
 openpyxl
+torch==2.4.1

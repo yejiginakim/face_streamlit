@@ -1,17 +1,13 @@
 # =============================
-# 0) 백엔드/로그 환경변수 먼저 고정
+# 0) 백엔드/로그 환경변수 (선택)
 # =============================
 import os
-os.environ.setdefault("KERAS_BACKEND", "tensorflow")  # Keras 3 백엔드 -> TF
-os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"              # (선택) TF 로그 억제
-os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")     # (선택) CPU 강제
+os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")  # 필요시 CPU 강제 (원하면 주석처리)
 
 # =============================
 # 1) 핵심 라이브러리 임포트 & 버전 확인
 # =============================
 import numpy as np
-import tensorflow as tf
-import keras
 import cv2
 import PIL
 import random
@@ -19,8 +15,6 @@ import pandas as pd
 from pathlib import Path
 
 print("NumPy:", np.__version__)
-print("TF:", tf.__version__)
-print("Keras:", keras.__version__)
 print("cv2:", cv2.__version__)
 print("Pillow:", PIL.__version__)
 
@@ -39,8 +33,6 @@ err_msgs = []
 try:
     from faceshape import (
         FaceShapeModel,
-        apply_rules,
-        decide_rule_vs_top2,
         topk_from_probs,
         top2_strings,
     )
@@ -187,15 +179,23 @@ if face_bgr is None:
     st.stop()
 
 # =============================
-# 7) 얼굴형 모델 로드 → 얼굴형 추론
+# 7) 얼굴형 모델 로드 → 얼굴형 추론 (PyTorch)
 # =============================
-MODEL_PATH   = "models/faceshape_efficientnetB4_best_20251018_223855.keras"
-CLASSES_PATH = "models/classes_20251018_223855.txt"
+MODEL_PATH   = "models/best.pth"     # ★ PyTorch 가중치
+CLASSES_PATH = "models/classes.txt"  # 라벨 텍스트
 IMG_SIZE     = (224, 224)
 
 @st.cache_resource
 def _load_faceshape():
-    return FaceShapeModel(MODEL_PATH, CLASSES_PATH, img_size=IMG_SIZE)
+    # TorchScript(.pt/.pth)면 그대로, state_dict면 model_builder 넘겨야 함
+    return FaceShapeModel(
+        model_path=MODEL_PATH,
+        classes_path=CLASSES_PATH,
+        img_size=IMG_SIZE,
+        normalize='imagenet',  # 모델에 Normalize 포함이면 None
+        half=False             # CUDA 있으면 True 가능
+        # model_builder=lambda: torchvision.models.efficientnet_b4(num_classes=5)  # state_dict일 때만 필요
+    )
 
 def _is_lfs_pointer(path:str)->bool:
     try:
@@ -209,7 +209,7 @@ def _is_lfs_pointer(path:str)->bool:
 
 faceshape_model = None
 if not os.path.isfile(MODEL_PATH):
-    st.warning("※ 얼굴형 모델(.keras)이 없습니다. (models/*.keras 필요)")
+    st.warning("※ 얼굴형 모델(.pth)이 없습니다. (models/*.pth 필요)")
 elif not os.path.isfile(CLASSES_PATH):
     st.warning("※ classes.txt 파일이 없습니다. (models/classes*.txt 필요)")
 elif _is_lfs_pointer(MODEL_PATH):
@@ -227,28 +227,23 @@ if faceshape_model is not None:
     try:
         pil_img = PIL.Image.fromarray(cv2.cvtColor(face_bgr, cv2.COLOR_BGR2RGB))
         probs = faceshape_model.predict_probs(pil_img)
-        top2_raw = topk_from_probs(probs, faceshape_model.class_names)
+
+        # 모델 Top-2 출력 (보정/룰 없음)
+        top2_raw = topk_from_probs(probs, faceshape_model.class_names, k=2)
         labels_raw = top2_strings(top2_raw)
-        st.subheader("모델 Top-2 (원본)")
+        st.subheader("모델 Top-2")
         st.write(" / ".join(labels_raw))
 
-        # (선택) MediaPipe 지표
+        # 최종 라벨 = 모델 Top-1
+        final_label = top2_raw[0][1] if len(top2_raw) > 0 else None
+
+        # (선택) 얼굴 메트릭 표시만 — 보정에는 사용 X
         try:
             ar, jaw, cw, jw = compute_metrics_bgr(face_bgr)
+            st.caption(f"metrics (disp): AR={ar}, jaw={jaw}, Cw={cw}, Jw={jw}")
         except Exception:
-            ar = jaw = cw = jw = None
+            pass
 
-        if any(v is not None for v in (ar, jaw, cw, jw)):
-            adj = apply_rules(probs, faceshape_model.class_names, ar=ar, jaw_deg=jaw, cw=cw, jw=jw)
-            probs_adj = adj['rule_probs']
-            top2_adj  = topk_from_probs(probs_adj, faceshape_model.class_names)
-            labels_adj = top2_strings(top2_adj)
-            st.subheader("모델 Top-2 (규칙 보정 후)")
-            st.write(" / ".join(labels_adj))
-            final_label = adj['rule_label']
-        else:
-            _, final_label, _ = decide_rule_vs_top2(probs, faceshape_model.class_names)
-            st.info("지표 없음 → 보정 미적용 (model-top1)")
     except Exception as e:
         st.warning("얼굴형 추론 중 경고가 발생했습니다.")
         st.exception(e)
@@ -256,11 +251,12 @@ if faceshape_model is not None:
 st.session_state["faceshape_label"] = final_label
 
 # =============================
-# 5) 프레임 로드 (엑셀 · 최소 규칙 + sports 시 shield)
+# 8) 프레임 로드 (엑셀 · 간단 규칙 + sports 시 shield)
 # =============================
 ROOT = Path.cwd()
 EXCEL_PATH = ROOT / "sunglass_df_test.xlsx"   # ← 네 엑셀 경로
 
+# cat-eye/underscore 혼선 방지: 모든 shape는 언더스코어 표기로 통일
 SHAPES6 = {"round","rectangular","trapezoid","aviator","cat_eye","shield"}
 
 FRAME_RULES_ORDERED = {
@@ -268,7 +264,7 @@ FRAME_RULES_ORDERED = {
     "Round":  ["rectangular"],
     "Square": ["round"],
     "Oblong": ["rectangular","trapezoid"],
-    "Heart":  ["cat-eye","round"],
+    "Heart":  ["cat_eye","round"],   # ← 언더스코어 표기
 }
 MAX_SHAPES_PER_FACE = 1   # 필요시 2로
 
@@ -279,23 +275,26 @@ except Exception as e:
     st.error(f"엑셀 카탈로그 로드 실패: {e}")
     st.stop()
 
-# 1) 필수 컬럼 체크 (lens_mm / bridge_mm / total_mm 사용)
+# 1) 필수 컬럼 체크
 need_cols = ["product_id","brand","shape","purpose","sex","lens_mm","bridge_mm","total_mm"]
 for c in need_cols:
     if c not in df.columns:
         st.error(f"엑셀에 '{c}' 컬럼이 없습니다.")
         st.stop()
 
-# 2) 전처리/검증
-df["shape"]   = df["shape"].astype(str).str.strip().str.lower()
-df["purpose"] = df["purpose"].astype(str).str.strip().str.lower()   # fashion/sports
-df["sex"]     = df["sex"].astype(str).str.strip().str.lower()       # male/female/unisex
+# 2) 전처리/검증 (하이픈→언더스코어 통일)
+df["shape"]   = (
+    df["shape"].astype(str).str.strip().str.lower()
+      .str.replace("-", "_", regex=False)
+)
+df["purpose"] = df["purpose"].astype(str).str.strip().str.lower()
+df["sex"]     = df["sex"].astype(str).str.strip().str.lower()
 for c in ["lens_mm","bridge_mm","total_mm"]:
     df[c] = pd.to_numeric(df[c], errors="coerce")
 
 bad = df.loc[~df["shape"].isin(SHAPES6), ["product_id","brand","shape"]]
 if len(bad) > 0:
-    st.error("shape 값은 round/rectangular/trapezoid/aviator/cat-eye/shield 만 허용됩니다.")
+    st.error("shape 값은 round/rectangular/trapezoid/aviator/cat_eye/shield 만 허용됩니다.")
     st.dataframe(bad); st.stop()
 
 # 3) 성별/분류 필터
@@ -310,12 +309,12 @@ if kset:
 
 cand = df[f].copy()
 
-# 4) 얼굴형 최소 규칙 + sports면 shield 추가(제한)
+# 4) 얼굴형 규칙(간단) + sports면 shield 추가
 label = st.session_state.get("faceshape_label", final_label)
 if label in FRAME_RULES_ORDERED:
     ok_shapes = list(FRAME_RULES_ORDERED[label][:MAX_SHAPES_PER_FACE])
     if 'sports' in kset and 'shield' not in ok_shapes:
-        if label in ('Oval','Round','Oblong'):   # 필요시 추가 확장 가능
+        if label in ('Oval','Round','Oblong'):
             ok_shapes.append('shield')
             ok_shapes = ok_shapes[:2]
     pool = cand[cand["shape"].isin(set(ok_shapes))]
@@ -326,11 +325,8 @@ if len(cand) == 0:
     st.error("조건(성별/분류/얼굴형)에 맞는 프레임을 찾지 못했습니다.")
     st.stop()
 
-## 5
-
-# ===== 프레임 파일 인덱싱 + 이미지 있는 행만 선택 (FRAME_ABS만 사용) =====
-import os, re, glob, unicodedata
-
+# ===== 프레임 파일 인덱싱 + 이미지 있는 행만 선택 =====
+import unicodedata
 FRAME_ABS = "/Users/yeji_kim/Desktop/itwill_final_project/face_streamlit/frame"
 ALLOWED_EXTS = (".png",".jpg",".jpeg",".webp",".avif",".PNG",".JPG",".JPEG",".WEBP",".AVIF")
 
@@ -338,57 +334,39 @@ def _nfc(s: str) -> str:
     return unicodedata.normalize("NFC", (s or "").strip())
 
 def _index_frame_files(base_dir: str):
-    """
-    base_dir 아래의 모든 이미지 파일을 스캔하여
-    - 확장자 제외 '파일명' → 절대경로 로 매핑
-    (대소문자/유니코드 정규화도 흡수)
-    """
-    idx_exact = {}   # 원형 키(정규화) → 경로
-    idx_lower = {}   # 소문자 키 → 경로
+    idx_exact, idx_lower = {}, {}
     for fp in glob.glob(os.path.join(base_dir, "**", "*"), recursive=True):
         if not os.path.isfile(fp):
             continue
         if not fp.lower().endswith(tuple(e.lower() for e in ALLOWED_EXTS)):
             continue
-        name = os.path.splitext(os.path.basename(fp))[0]  # 확장자 제거
+        name = os.path.splitext(os.path.basename(fp))[0]
         key = _nfc(name)
-        if key not in idx_exact:
-            idx_exact[key] = fp
-        lkey = key.lower()
-        if lkey not in idx_lower:
-            idx_lower[lkey] = fp
+        idx_exact.setdefault(key, fp)
+        idx_lower.setdefault(key.lower(), fp)
     return idx_exact, idx_lower
 
 IDX_EXACT, IDX_LOWER = _index_frame_files(FRAME_ABS)
 
 def _match_file_for_pid(pid: str):
-    """
-    product_id(확장자 없음)를 파일명(확장자 제외)과 매칭.
-    1) 정확 일치 → 2) 대소문자 무시 → 3) 언더바 앞부분 일치 → 4) 시작이 같은 것
-    """
     pid = _nfc(pid or "")
     if not pid:
         return None
-    # 1) 정확 일치
     if pid in IDX_EXACT:
         return IDX_EXACT[pid]
-    # 2) 대소문자 무시
     if pid.lower() in IDX_LOWER:
         return IDX_LOWER[pid.lower()]
-    # 3) 언더바 앞부분만으로 재시도 (예: ABC_001 → ABC)
     if "_" in pid:
         base = pid.split("_", 1)[0]
         if base in IDX_EXACT:
             return IDX_EXACT[base]
         if base.lower() in IDX_LOWER:
             return IDX_LOWER[base.lower()]
-    # 4) 시작이 같은 키 검색
     for k, path in IDX_EXACT.items():
         if k.lower().startswith(pid.lower()):
             return path
     return None
 
-# cand에서 '이미지 실제 존재'하는 행만 남기기
 cand = cand.copy()
 cand["__img_path__"] = cand["product_id"].astype(str).map(_match_file_for_pid)
 cand2 = cand[~cand["__img_path__"].isna()].copy()
@@ -408,10 +386,8 @@ if len(cand2) == 0:
 row = cand2.sample(1, random_state=random.randint(0, 10_000)).iloc[0].to_dict()
 img_path = row["__img_path__"]
 
-# (깨끗이) 임시 컬럼 제거
 if "__img_path__" in cand.columns:
     cand.drop(columns=["__img_path__"], inplace=True, errors="ignore")
-
 
 # 7) 프레임 이미지 로드 (BGRA 보장)
 def _ensure_bgra_fallback(p: str):
@@ -449,14 +425,14 @@ st.caption(
 )
 
 # =============================
-# 8) PD/자세/스케일/합성
+# 9) PD/자세/스케일/합성
 # =============================
 pd_px   = None
 mid     = (0, 0)
 eye_roll_deg = 0.0
 PD_SRC  = None  # 'iphone' | 'manual' | 'mediapipe' | None
 
-# 8-1) PD 소스 결정 (실패해도 중단하지 않음)
+# 9-1) PD 소스 결정
 if (PD_MM is not None) and (PD_MM > 0):
     PD_SRC = "manual"
 elif use_phone and (PD_MM_raw is not None):
@@ -471,7 +447,7 @@ else:
         PD_SRC = None
         st.warning(f"MediaPipe PD 계산 실패({e}) → PD 없이 진행합니다.")
 
-# 8-2) 머리자세(없어도 진행)
+# 9-2) 머리자세(없어도 진행)
 yaw = pitch = roll = None
 if hasattr(vision, "head_pose_ypr"):
     try:
@@ -481,7 +457,7 @@ if hasattr(vision, "head_pose_ypr"):
 if roll is None:
     roll = eye_roll_deg
 
-# 8-3) 디버그 표기
+# 9-3) 디버그 표기
 if PD_SRC == "mediapipe":
     st.write(
         f"**PD_px**: {pd_px:.2f} px  /  "
@@ -494,14 +470,14 @@ elif PD_SRC in ("iphone", "manual"):
 else:
     st.caption("PD 미사용: 프레임 총폭과 얼굴 폭으로 스케일 맞춥니다.")
 
-# 8-4) 프레임 전처리
+# 9-4) 프레임 전처리
 fg_bgra = vision.remove_white_to_alpha(fg_bgra, thr=240)
 fg_bgra = vision.trim_transparent(fg_bgra, pad=8)
 
 h_face, w_face = face_bgr.shape[:2]
 h0, w0 = fg_bgra.shape[:2]
 
-# 8-5) 목표 스케일 계산 (PD 있으면 GCD 기반, 없으면 TOTAL↔CHEEK_MM 기반)
+# 9-5) 목표 스케일 계산
 GCD2PD_CAL = 0.92
 target_GCD_px = None
 if pd_px is not None:
@@ -527,7 +503,7 @@ if Cw_px is not None:
     max_w = min(max_w, 0.98 * Cw_px)
 target_total_px = float(np.clip(target_total_px, min_w, max_w))
 
-# 8-6) 리사이즈/회전
+# 9-6) 리사이즈/회전
 scale = (target_total_px / max(w0, 1)) * float(scale_mult)
 scale = float(np.clip(scale, 0.35, 2.2))
 
@@ -540,7 +516,7 @@ fg_rot = cv2.warpAffine(
     flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=(0,0,0,0)
 )
 
-# 8-7) 위치 앵커
+# 9-7) 위치 앵커
 pitch_deg = pitch if pitch is not None else 0.0
 pitch_dy  = int(pitch_deg * 0.8)
 
@@ -552,7 +528,7 @@ else:
     gx = int(mid[0] - fg_rot.shape[1] * anchor) + dx
     gy = int(mid[1] - fg_rot.shape[0] * 0.50) + dy + pitch_dy
 
-# 8-8) 합성
+# 9-8) 합성
 h_bg, w_bg = face_bgr.shape[:2]
 margin_x, margin_y = 300, 150
 bg_expanded = cv2.copyMakeBorder(
@@ -566,7 +542,7 @@ gy_expanded = gy + margin_y
 out = vision.overlay_rgba(bg_expanded, fg_rot, gx_expanded, gy_expanded)
 show_image_bgr(out, caption="합성 결과")
 
-# 8-9) 다운로드
+# 9-9) 다운로드
 try:
     from io import BytesIO
     rgb = cv2.cvtColor(out, cv2.COLOR_BGR2RGB)
@@ -576,11 +552,12 @@ try:
     pid = str(row.get("product_id", "")).strip()
     fname = f"{b}_{pid}.png" if pid else f"{b}.png"
     st.download_button("결과 PNG 다운로드", data=buf.getvalue(), file_name=fname, mime="image/png")
+    del buf
 except Exception as e:
     st.warning(f"다운로드 준비 중 경고: {e}")
 
 # =============================
-# 9) (선택) 얼굴형 텍스트 추천
+# 10) 얼굴형 텍스트 추천 (Top-1 기준)
 # =============================
 if final_label:
     rec = None
