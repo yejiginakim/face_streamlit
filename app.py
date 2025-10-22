@@ -326,74 +326,92 @@ if len(cand) == 0:
     st.error("조건(성별/분류/얼굴형)에 맞는 프레임을 찾지 못했습니다.")
     st.stop()
 
+## 5
 
-# ===== 이미지 경로 결정 (절대경로 한 곳만 재귀 탐색) =====
-import re, glob, unicodedata  # 상단에 없다면 추가
+# ===== 프레임 파일 인덱싱 + 이미지 있는 행만 선택 (FRAME_ABS만 사용) =====
+import os, re, glob, unicodedata
 
 FRAME_ABS = "/Users/yeji_kim/Desktop/itwill_final_project/face_streamlit/frame"
-ALLOWED_EXTS = (".png", ".jpg", ".jpeg", ".webp", ".avif")
+ALLOWED_EXTS = (".png",".jpg",".jpeg",".webp",".avif",".PNG",".JPG",".JPEG",".WEBP",".AVIF")
 
 def _nfc(s: str) -> str:
     return unicodedata.normalize("NFC", (s or "").strip())
 
-def _resolve_image(row: dict):
+def _index_frame_files(base_dir: str):
     """
-    오직 FRAME_ABS 폴더만 재귀 탐색.
-    1) image_path가 있으면 우선 사용 (절대/상대 모두 허용, 상대면 FRAME_ABS 밑에서 찾기)
-    2) product_id + 확장자로 FRAME_ABS/** 재귀 탐색
-    3) 보정: 언더바 앞부분만 같은 파일도 허용(ABC_001 → ABC.*)
+    base_dir 아래의 모든 이미지 파일을 스캔하여
+    - 확장자 제외 '파일명' → 절대경로 로 매핑
+    (대소문자/유니코드 정규화도 흡수)
     """
-    # 1) image_path 우선
-    p = _nfc(str(row.get("image_path", "")))
-    if p:
-        if os.path.isabs(p) and os.path.exists(p):
-            return p
-        # 상대경로면 FRAME_ABS 기준으로도 시도
-        cand = os.path.join(FRAME_ABS, p)
-        if os.path.exists(cand):
-            return cand
-        # 혹시 현재 CWD 기준으로 존재하면 그걸로
-        if os.path.exists(p):
-            return p
+    idx_exact = {}   # 원형 키(정규화) → 경로
+    idx_lower = {}   # 소문자 키 → 경로
+    for fp in glob.glob(os.path.join(base_dir, "**", "*"), recursive=True):
+        if not os.path.isfile(fp):
+            continue
+        if not fp.lower().endswith(tuple(e.lower() for e in ALLOWED_EXTS)):
+            continue
+        name = os.path.splitext(os.path.basename(fp))[0]  # 확장자 제거
+        key = _nfc(name)
+        if key not in idx_exact:
+            idx_exact[key] = fp
+        lkey = key.lower()
+        if lkey not in idx_lower:
+            idx_lower[lkey] = fp
+    return idx_exact, idx_lower
 
-    # 2) product_id 기반
-    pid = _nfc(str(row.get("product_id", "")))
+IDX_EXACT, IDX_LOWER = _index_frame_files(FRAME_ABS)
+
+def _match_file_for_pid(pid: str):
+    """
+    product_id(확장자 없음)를 파일명(확장자 제외)과 매칭.
+    1) 정확 일치 → 2) 대소문자 무시 → 3) 언더바 앞부분 일치 → 4) 시작이 같은 것
+    """
+    pid = _nfc(pid or "")
     if not pid:
         return None
-    pid_clean = re.sub(r"[^A-Za-z0-9._-]", "", pid)
-
-    # 정확히 같은 파일명 탐색
-    for ext in ALLOWED_EXTS:
-        hits = glob.glob(os.path.join(FRAME_ABS, "**", pid_clean + ext), recursive=True)
-        if hits:
-            return hits[0]
-
-    # 3) 언더바 앞부분까지 허용 (예: ABC_001 → ABC.png)
-    if "_" in pid_clean:
-        pid_base = pid_clean.split("_", 1)[0]
-        for ext in ALLOWED_EXTS:
-            hits = glob.glob(os.path.join(FRAME_ABS, "**", pid_base + ext), recursive=True)
-            if hits:
-                return hits[0]
-
+    # 1) 정확 일치
+    if pid in IDX_EXACT:
+        return IDX_EXACT[pid]
+    # 2) 대소문자 무시
+    if pid.lower() in IDX_LOWER:
+        return IDX_LOWER[pid.lower()]
+    # 3) 언더바 앞부분만으로 재시도 (예: ABC_001 → ABC)
+    if "_" in pid:
+        base = pid.split("_", 1)[0]
+        if base in IDX_EXACT:
+            return IDX_EXACT[base]
+        if base.lower() in IDX_LOWER:
+            return IDX_LOWER[base.lower()]
+    # 4) 시작이 같은 키 검색
+    for k, path in IDX_EXACT.items():
+        if k.lower().startswith(pid.lower()):
+            return path
     return None
 
-# ===== 이미지 있는 행만 뽑기 (최대 40회 시도) =====
-row = img_path = None
-for _ in range(40):
-    cand_row = cand.sample(1, random_state=random.randint(0, 10_000)).iloc[0].to_dict()
-    test_path = _resolve_image(cand_row)
-    if test_path:
-        row, img_path = cand_row, test_path
-        break
+# cand에서 '이미지 실제 존재'하는 행만 남기기
+cand = cand.copy()
+cand["__img_path__"] = cand["product_id"].astype(str).map(_match_file_for_pid)
+cand2 = cand[~cand["__img_path__"].isna()].copy()
 
-if row is None:
+if len(cand2) == 0:
     st.error(
-        "후보는 있지만 연결된 이미지 파일을 찾지 못했습니다.\n"
-        f"→ {FRAME_ABS} 폴더에 실제 파일이 있고, 파일명이 product_id와 정확히 같은지(확장자 포함) 확인해 주세요."
+        "후보는 있지만 frame 폴더에서 일치하는 파일명을 찾지 못했습니다.\n"
+        f"→ 폴더: {FRAME_ABS}\n"
+        "   - 파일 ‘이름’(확장자 제외)이 엑셀 product_id와 같아야 합니다.\n"
+        "   - 대소문자/유니코드(한글 조합형)도 자동 보정하지만, 완전 불일치 시 매칭 불가합니다."
     )
+    st.write("예시 후보 product_id:")
     st.dataframe(cand[["product_id","brand","shape"]].head(20))
     st.stop()
+
+# 이미지가 있는 행 중에서만 랜덤 선택
+row = cand2.sample(1, random_state=random.randint(0, 10_000)).iloc[0].to_dict()
+img_path = row["__img_path__"]
+
+# (깨끗이) 임시 컬럼 제거
+if "__img_path__" in cand.columns:
+    cand.drop(columns=["__img_path__"], inplace=True, errors="ignore")
+
 
 # 7) 프레임 이미지 로드 (BGRA 보장)
 def _ensure_bgra_fallback(p: str):
