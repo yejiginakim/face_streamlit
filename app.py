@@ -261,7 +261,7 @@ st.session_state["faceshape_label"] = final_label
 ROOT = Path.cwd()
 EXCEL_PATH = ROOT / "sunglass_df_test.xlsx"   # ← 네 엑셀 경로
 
-SHAPES6 = {"round","rectangular","trapezoid","aviator","cat-eye","shield"}
+SHAPES6 = {"round","rectangular","trapezoid","aviator","cat_eye","shield"}
 
 FRAME_RULES_ORDERED = {
     "Oval":   ["trapezoid","rectangular"],
