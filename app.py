@@ -175,31 +175,13 @@ if err_msgs:
     st.stop()
 
 st.divider()
-
-# =============================
-# 5) 프레임 로드
-# =============================
-try:
-    fg_bgra, dims = vision.load_fixed_antena()
-except Exception as e:
-    st.error(f"프레임 로드 호출 실패: {e}")
-    dims = None
-    fg_bgra = None
-
-if fg_bgra is None or dims is None:
-    st.error("프레임 이미지를 읽을 수 없어요. 경로/포맷을 확인해 주세요.")
-    st.code(f"""
-exists(frames)={os.path.isdir('frames')}
-exists(frames/images)={os.path.isdir('frames/images')}
-list(frames/images)[:10]={os.listdir('frames/images')[:10] if os.path.isdir('frames/images') else 'N/A'}
-glob Antena_01.*={glob.glob('frames/images/SF191SKN_004_61.*')}
-    """, language="text")
+# 실행 버튼 누르기 전에는 아무 것도 진행하지 않음
+if not run:
+    st.info("성별/분류를 선택하고 '실행'을 누르면 얼굴형 분석과 추천이 시작됩니다.")
     st.stop()
 
-A, DBL, TOTAL = dims
-GCD = A + DBL
-k = (TOTAL / GCD) if GCD else 2.0
-st.caption(f"프레임 치수 A={A}, DBL={DBL}, TOTAL={TOTAL} (GCD={GCD}, k=TOTAL/GCD={k:.3f})")
+
+
 
 # =============================
 # 6) 얼굴 이미지 업로드
@@ -309,6 +291,130 @@ if faceshape_model is not None:
         st.exception(e)
 
 st.session_state["faceshape_label"] = final_label
+
+
+
+# =============================
+# 5) 프레임 로드 (엑셀 카탈로그 · 최소 규칙 + sports시 shield)
+# =============================
+import os, random
+import pandas as pd
+
+EXCEL_PATH = "/Users/yeji_kim/Desktop/itwill_final_project/sunglass_df.xlsx"  # 카탈로그 경로
+
+# 6개 모양 고정
+SHAPES6 = {"round","rectangular","trapezoid","aviator","cat-eye","shield"}
+
+# 얼굴형 → 최소 추천 모양(우선순위)
+FRAME_RULES_ORDERED = {
+    "Oval":   ["trapezoid","rectangular"],
+    "Round":  ["rectangular"],
+    "Square": ["round"],
+    "Oblong": ["rectangular","trapezoid"],
+    "Heart":  ["cat-eye","round"],
+}
+MAX_SHAPES_PER_FACE = 1   # 너무 많지 않게 1개만 (원하면 2로)
+
+def _norm(x):
+    return (x or "").strip().lower()
+
+# 0) 엑셀 로드
+try:
+    df = pd.read_excel(EXCEL_PATH)
+except Exception as e:
+    st.error(f"엑셀 카탈로그 로드 실패: {e}")
+    st.stop()
+
+# 1) 필수 컬럼 체크
+need_cols = ["product_id","brand","shape","purpose","sex","lens","bridc","total_r"]
+for c in need_cols:
+    if c not in df.columns:
+        st.error(f"엑셀에 '{c}' 컬럼이 없습니다.")
+        st.stop()
+
+# 2) 전처리/검증
+df["shape"]   = df["shape"].astype(str).str.strip().str.lower()
+df["purpose"] = df["purpose"].astype(str).str.strip().str.lower()   # fashion/sports
+df["sex"]     = df["sex"].astype(str).str.strip().str.lower()       # male/female/unisex
+for c in ["lens","bridc","total_r"]:
+    df[c] = pd.to_numeric(df[c], errors="coerce")
+
+bad = df.loc[~df["shape"].isin(SHAPES6), ["product_id","brand","shape"]]
+if len(bad) > 0:
+    st.error("shape 값은 round/rectangular/trapezoid/aviator/cat-eye/shield 만 허용됩니다.")
+    st.dataframe(bad)
+    st.stop()
+
+# 3) 성별/분류 1차 필터
+gset = {_norm(g) for g in use_gender}
+kset = {_norm(k) for k in use_kind}
+
+f = pd.Series([True] * len(df))
+if gset:
+    f &= df["sex"].isin(gset) | (df["sex"] == "unisex")
+if kset:
+    f &= df["purpose"].isin(kset)
+
+cand = df[f].copy()
+
+# 4) 얼굴형 최소 규칙 + sports면 shield 조건부 추가
+label = st.session_state.get("faceshape_label", final_label)
+
+if label in FRAME_RULES_ORDERED:
+    ok_shapes = list(FRAME_RULES_ORDERED[label][:MAX_SHAPES_PER_FACE])
+
+    # sports 선택 시, 일부 얼굴형에 한해 shield 추가 (최대 2유형로 제한)
+    if 'sports' in kset and 'shield' not in ok_shapes:
+        if label in ('Oval','Round','Oblong'):   # 필요하면 얼굴형 추가 가능
+            ok_shapes.append('shield')
+            ok_shapes = ok_shapes[:2]
+
+    pool = cand[cand["shape"].isin(set(ok_shapes))]
+    if len(pool) > 0:
+        cand = pool
+
+if len(cand) == 0:
+    st.error("조건(성별/분류/얼굴형)에 맞는 프레임을 찾지 못했습니다.")
+    st.stop()
+
+# 5) 후보 중 랜덤 1개 선택
+row = cand.sample(1, random_state=random.randint(0, 10_000)).iloc[0].to_dict()
+
+# 6) 이미지 경로 결정: image_path 우선, 없으면 product_id.* 탐색
+def _resolve_image(row: dict):
+    p = (row.get("image_path") or "").strip()
+    if p and os.path.exists(p):
+        return p
+    base = os.path.join("frames","images", str(row["product_id"]).strip())
+    for ext in (".png",".webp",".avif",".jpg",".jpeg"):
+        cp = base + ext
+        if os.path.exists(cp):
+            return cp
+    return None
+
+img_path = _resolve_image(row)
+if not img_path:
+    st.error(f"이미지 파일을 찾을 수 없습니다: frames/images/{row['product_id']}.[png|webp|avif|jpg]")
+    st.stop()
+
+# 7) 프레임 이미지 로드 (BGRA 보장)
+fg_bgra = vision.ensure_bgra(img_path)
+if fg_bgra is None:
+    st.error(f"프레임 이미지를 읽을 수 없습니다: {img_path}")
+    st.stop()
+
+# 8) 치수 세팅
+A, DBL, TOTAL = float(row["lens"]), float(row["bridc"]), float(row["total_r"])
+dims = (A, DBL, TOTAL)
+GCD = A + DBL
+k = (TOTAL / GCD) if GCD else 2.0
+
+st.caption(
+    f"선택 프레임: {row.get('brand','')} / {row.get('product_id','')}  · "
+    f"shape={row.get('shape','?')} · A={A}, DBL={DBL}, TOTAL={TOTAL} "
+    f"(GCD={GCD}, k=TOTAL/GCD={k:.3f})"
+)
+
 
 # =============================
 # 8) PD/자세/스케일/합성
