@@ -326,25 +326,73 @@ if len(cand) == 0:
     st.error("조건(성별/분류/얼굴형)에 맞는 프레임을 찾지 못했습니다.")
     st.stop()
 
-# 5) 후보 중 랜덤 1개 선택
-row = cand.sample(1, random_state=random.randint(0, 10_000)).iloc[0].to_dict()
 
-# 6) 이미지 경로 결정
+# ===== 이미지 경로 결정 (절대경로 한 곳만 재귀 탐색) =====
+import re, glob, unicodedata  # 상단에 없다면 추가
+
+FRAME_ABS = "/Users/yeji_kim/Desktop/itwill_final_project/face_streamlit/frame"
+ALLOWED_EXTS = (".png", ".jpg", ".jpeg", ".webp", ".avif")
+
+def _nfc(s: str) -> str:
+    return unicodedata.normalize("NFC", (s or "").strip())
+
 def _resolve_image(row: dict):
-    p = (row.get("image_path") or "").strip()
-    if p and os.path.exists(p):
-        return p
-    pid = str(row.get("product_id", "")).strip()
-    base = os.path.join("frames","images", pid)
-    for ext in (".png",".webp",".avif",".jpg",".jpeg"):
-        cp = base + ext
-        if os.path.exists(cp):
-            return cp
+    """
+    오직 FRAME_ABS 폴더만 재귀 탐색.
+    1) image_path가 있으면 우선 사용 (절대/상대 모두 허용, 상대면 FRAME_ABS 밑에서 찾기)
+    2) product_id + 확장자로 FRAME_ABS/** 재귀 탐색
+    3) 보정: 언더바 앞부분만 같은 파일도 허용(ABC_001 → ABC.*)
+    """
+    # 1) image_path 우선
+    p = _nfc(str(row.get("image_path", "")))
+    if p:
+        if os.path.isabs(p) and os.path.exists(p):
+            return p
+        # 상대경로면 FRAME_ABS 기준으로도 시도
+        cand = os.path.join(FRAME_ABS, p)
+        if os.path.exists(cand):
+            return cand
+        # 혹시 현재 CWD 기준으로 존재하면 그걸로
+        if os.path.exists(p):
+            return p
+
+    # 2) product_id 기반
+    pid = _nfc(str(row.get("product_id", "")))
+    if not pid:
+        return None
+    pid_clean = re.sub(r"[^A-Za-z0-9._-]", "", pid)
+
+    # 정확히 같은 파일명 탐색
+    for ext in ALLOWED_EXTS:
+        hits = glob.glob(os.path.join(FRAME_ABS, "**", pid_clean + ext), recursive=True)
+        if hits:
+            return hits[0]
+
+    # 3) 언더바 앞부분까지 허용 (예: ABC_001 → ABC.png)
+    if "_" in pid_clean:
+        pid_base = pid_clean.split("_", 1)[0]
+        for ext in ALLOWED_EXTS:
+            hits = glob.glob(os.path.join(FRAME_ABS, "**", pid_base + ext), recursive=True)
+            if hits:
+                return hits[0]
+
     return None
 
-img_path = _resolve_image(row)
-if not img_path:
-    st.error(f"이미지 파일을 찾을 수 없습니다: frames/images/{row.get('product_id','?')}.[png|webp|avif|jpg]")
+# ===== 이미지 있는 행만 뽑기 (최대 40회 시도) =====
+row = img_path = None
+for _ in range(40):
+    cand_row = cand.sample(1, random_state=random.randint(0, 10_000)).iloc[0].to_dict()
+    test_path = _resolve_image(cand_row)
+    if test_path:
+        row, img_path = cand_row, test_path
+        break
+
+if row is None:
+    st.error(
+        "후보는 있지만 연결된 이미지 파일을 찾지 못했습니다.\n"
+        f"→ {FRAME_ABS} 폴더에 실제 파일이 있고, 파일명이 product_id와 정확히 같은지(확장자 포함) 확인해 주세요."
+    )
+    st.dataframe(cand[["product_id","brand","shape"]].head(20))
     st.stop()
 
 # 7) 프레임 이미지 로드 (BGRA 보장)
