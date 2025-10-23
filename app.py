@@ -448,7 +448,7 @@ row = recs[pretty.index(sel_label)]
 st.session_state.selected_pid = row.get("product_id")
 
 # =============================
-# 9) 프레임 이미지 로드/전처리
+# 9) 프레임 이미지 로드/전처리  [교체]
 # =============================
 FRAME_ROOT = "frame"
 SHAPE_DIR_MAP = {
@@ -462,16 +462,20 @@ SHAPE_DIR_MAP = {
 EXTS = (".png", ".webp", ".avif", ".jpg", ".jpeg")
 
 def _resolve_image(row: dict) -> str | None:
+    import os, glob
     p = (row.get("image_path") or "").strip() if "image_path" in row else ""
-    if p and os.path.exists(p): return p
+    if p and os.path.exists(p):
+        return p
     pid = str(row.get("product_id","")).strip()
-    if not pid: return None
+    if not pid:
+        return None
     shape_dir = SHAPE_DIR_MAP.get(str(row.get("shape","")).strip().lower())
     if shape_dir:
         base = os.path.join(FRAME_ROOT, shape_dir, pid)
         for ext in EXTS:
             cp = base + ext
-            if os.path.exists(cp): return cp
+            if os.path.exists(cp):
+                return cp
     pattern = os.path.join(FRAME_ROOT, "**", pid + ".*")
     for cp in glob.glob(pattern, recursive=True):
         if os.path.splitext(cp)[1].lower() in EXTS and os.path.isfile(cp):
@@ -480,83 +484,92 @@ def _resolve_image(row: dict) -> str | None:
 
 img_path = _resolve_image(row)
 if not img_path:
-    st.error(f"프레임 파일을 찾지 못했습니다: {row.get('product_id')}"); st.stop()
+    st.error(f"프레임 파일을 찾지 못했습니다: {row.get('product_id')}")
+    st.stop()
 
-
+# --- 프레임 전처리 ---
 fg_bgra = vision.ensure_bgra(img_path)
-fg_bgra = vision.remove_white_to_alpha(fg_bgra, thr=235)  # 필요시 230~240 튜닝
+if fg_bgra is None:
+    st.error(f"프레임 이미지를 읽을 수 없습니다: {img_path}")
+    st.stop()
+
+# 배경 흰색 제거 및 트리밍
+fg_bgra = vision.remove_white_to_alpha(fg_bgra, thr=235)
 fg_bgra = vision.trim_transparent(fg_bgra, pad=12)
 
-# 👇 렌즈 투명화(둘 중 하나 선택)
-fg_bgra = vision.make_lens_transparent_auto(fg_bgra, s_max=90, v_max=130, alpha_mul=0.55)
+# (선택) 렌즈 투명화 — vision.py에 함수 추가했을 때만 사용하세요.
+# fg_bgra = vision.make_lens_transparent_auto(fg_bgra, s_max=90, v_max=130, alpha_mul=0.55)
 # 또는
 # fg_bgra = vision.make_lens_transparent_gray(fg_bgra, gray_tol=18, v_max=135, alpha_mul=0.60)
 
-# 이후 스케일/회전/합성
-fg_bgra = vision.rotate_bgra_keep_bounds(fg_bgra, -roll)  # 회전 크롭 방지 버전
+# ✅ 여기서만 회전(크롭 방지), 합성 단계에서는 회전 금지
+roll = float(st.session_state.get("roll", 0.0) or 0.0)
+fg_bgra = vision.rotate_bgra_keep_bounds(fg_bgra, -roll)
 fg_bgra = vision.trim_transparent(fg_bgra, pad=8)
 
 st.session_state.fg_bgra = fg_bgra
 
-# 프레임 치수/비율
-A, DBL, TOTAL = float(row["lens_mm"]), float(row["bridge_mm"]), float(row["total_mm"])
+# 프레임 치수/비율 (스케일 계산용)
+A  = float(row["lens_mm"])
+DBL = float(row["bridge_mm"])
+TOTAL = float(row["total_mm"])
 GCD = A + DBL
 k = (TOTAL / GCD) if GCD else 2.0
-st.session_state.k_ratio = float(k)
-st.session_state.TOTAL_mm = float(TOTAL)
+st.session_state.k_ratio   = float(k)
+st.session_state.TOTAL_mm  = float(TOTAL)
 
 # =============================
 # =============================
+# 10) 합성 — 스케일/배치/합성 (회전 없음)  [교체]
 # =============================
-# =============================
-# 10) 합성 — 스케일 (라디오 반영)
-# ===== (기존 스케일 계산 블록 전체 교체) =====
 face_bgr = st.session_state.face_bgr
 fg_bgra  = st.session_state.fg_bgra
-mid      = st.session_state.mid or (0,0)
-roll     = float(st.session_state.roll or 0.0)
-pitch    = float(st.session_state.pitch or 0.0)
+mid      = st.session_state.mid or (0, 0)
+roll     = float(st.session_state.get("roll", 0.0) or 0.0)   # 회전은 이미 전처리에서 반영됨
+pitch    = float(st.session_state.get("pitch", 0.0) or 0.0)
 
-PD_px  = st.session_state.PD_px_auto
-Cw_px  = st.session_state.Cw_px_auto
-NC_px  = st.session_state.NC_px_auto
-Eye_px = st.session_state.Eye_px_auto
+# 탐지값
+PD_px   = st.session_state.get("PD_px_auto",  None)
+Cw_px   = st.session_state.get("Cw_px_auto",  None)
+NC_px   = st.session_state.get("NC_px_auto",  None)
+Eye_px  = st.session_state.get("Eye_px_auto", None)
 
-k     = float(st.session_state.k_ratio or 2.0)            # TOTAL/GCD
+# 프레임 스펙
+k     = float(st.session_state.k_ratio or 2.0)           # TOTAL/GCD
 TOTAL = float(st.session_state.TOTAL_mm or 140.0)
-GCD   = TOTAL / k if k else (float(row["lens_mm"]) + float(row["bridge_mm"]))
+GCD   = TOTAL / k if k else None
 
+# 크기/모드
 h_face, w_face = face_bgr.shape[:2]
 h0, w0 = fg_bgra.shape[:2]
-
 mode = st.session_state.get("scale_mode", "눈폭↔TOTAL(강제)")
+
 GCD2PD = 0.92  # PD ≈ 0.92 * GCD
 
-# --- 목표 TOTAL 폭(px) ---
-if mode == "PD↔GCD(권장)" and PD_px and PD_px > 1 and GCD > 0:
-    gcd_px_target  = PD_px / GCD2PD
+# --- 목표 TOTAL 폭(px) 산출 ---
+if mode == "PD↔GCD(권장)" and PD_px and PD_px > 1 and (GCD and GCD > 0):
+    gcd_px_target   = PD_px / GCD2PD
     total_target_px = gcd_px_target * k
 
 elif mode == "PD↔TOTAL(강제)" and PD_px and PD_px > 1:
     total_target_px = (PD_px / GCD2PD) * k
 
 elif mode == "눈폭↔TOTAL(강제)" and Eye_px and Eye_px > 1:
-    # 눈 라인 얼굴폭에 '총너비'를 정확히 비례시킴
-    BETA = 1.55   # ← 크면 1.45~1.70 사이로 튜닝 (작게 보이면 더 키워)
+    # 눈 라인 얼굴폭에 총너비를 직접 비례
+    BETA = 1.55   # 작아 보이면 1.60~1.70로 살짝 올리세요
     total_target_px = Eye_px * BETA
 
 elif mode == "볼폭↔TOTAL(강제)" and Cw_px and Cw_px > 1:
-    ALPHA = 0.85  # 볼폭 대비 총너비 비율(조금 더 큼)
+    ALPHA = 0.85
     total_target_px = Cw_px * ALPHA
+
 else:
-    total_target_px = 0.72 * w_face  # 완전 폴백
+    total_target_px = 0.72 * w_face  # 폴백
 
-# --- 폭 기준 스케일 ---
+# --- 스케일 계산 (폭 기준 + 높이 캡) ---
 scale_w = total_target_px / max(w0, 1)
-
-# --- 높이 캡(세로 과대 방지) ---
 if NC_px and NC_px > 1:
-    H_CAP = 0.72  # 0.68~0.80 사이에서 조절 가능 (작게 눌리면 ↑)
+    H_CAP = 0.72  # 안경 세로 과대 방지
     max_h = H_CAP * NC_px
 else:
     max_h = 0.45 * h_face
@@ -566,15 +579,12 @@ scale = min(scale_w, scale_h)
 scale *= float(st.session_state.scale_mult)
 scale = float(np.clip(scale, 0.10, 2.50))
 
-# --- 리사이즈/회전/배치/합성 ---
+# --- 리사이즈 (회전 없음: 전처리에서 이미 했음) ---
 new_size = (max(1, int(w0 * scale)), max(1, int(h0 * scale)))
 fg_scaled = cv2.resize(fg_bgra, new_size, interpolation=cv2.INTER_LINEAR)
-M = cv2.getRotationMatrix2D((fg_scaled.shape[1] / 2, fg_scaled.shape[0] / 2), -roll, 1.0)
+fg_rot = fg_scaled  # ✅ 회전 금지 (이미 전처리에서 keep-bounds 회전 완료)
 
-fg_rot = vision.rotate_bgra_keep_bounds(fg_scaled, -roll)
-# 회전 후 남는 투명 여백 정리(선택)
-fg_rot = vision.trim_transparent(fg_rot, pad=8)
-
+# --- 배치 ---
 pitch_dy = int((pitch or 0.0) * 0.8)
 if mid == (0, 0):
     gx = int(face_bgr.shape[1] * 0.5 - fg_rot.shape[1] * 0.5) + st.session_state.dx
@@ -583,9 +593,30 @@ else:
     gx = int(mid[0] - fg_rot.shape[1] * 0.5) + st.session_state.dx
     gy = int(mid[1] - fg_rot.shape[0] * 0.5) + st.session_state.dy + pitch_dy
 
+# --- 안전 여백 후 합성 (안경이 화면 밖으로 나가도 안 잘리게) ---
 margin_x, margin_y = 300, 150
-bg_expanded = cv2.copyMakeBorder(face_bgr, margin_y, margin_y, margin_x, margin_x,
-                                 cv2.BORDER_CONSTANT, value=(0,0,0))
+bg_expanded = cv2.copyMakeBorder(
+    face_bgr, margin_y, margin_y, margin_x, margin_x,
+    cv2.BORDER_CONSTANT, value=(0, 0, 0)
+)
 out = vision.overlay_rgba(bg_expanded, fg_rot, gx + margin_x, gy + margin_y)
-show_image_bgr(out, caption=f"합성 — {row.get('brand','?')} / {row.get('product_id','?')} · {row.get('shape','?')} · FaceFor:{row.get('face_for') or 'Unknown'}")
-# =========================================
+
+show_image_bgr(
+    out,
+    caption=f"합성 — {row.get('brand','?')} / {row.get('product_id','?')} · {row.get('shape','?')} · FaceFor:{row.get('face_for') or 'Unknown'}"
+)
+
+# --- 다운로드 ---
+try:
+    from io import BytesIO
+    rgb = cv2.cvtColor(out, cv2.COLOR_BGR2RGB)
+    buf = BytesIO()
+    PIL.Image.fromarray(rgb).save(buf, format="PNG")
+    st.download_button(
+        "결과 PNG 다운로드",
+        data=buf.getvalue(),
+        file_name=f"{row.get('product_id','frame')}_result.png",
+        mime="image/png"
+    )
+except Exception as e:
+    st.warning(f"다운로드 준비 중 경고: {e}")
