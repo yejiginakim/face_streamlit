@@ -326,7 +326,7 @@ except Exception as e:
     st.stop()
 
 # 1) 필수 컬럼 체크
-need_cols = ["product_id","brand","shape","purpose","sex","lens","bridc","total_r"]
+need_cols = ["product_id","brand","shape","purpose","sex","lens_mm","bridge_mm","total_mm"]
 for c in need_cols:
     if c not in df.columns:
         st.error(f"엑셀에 '{c}' 컬럼이 없습니다.")
@@ -336,7 +336,7 @@ for c in need_cols:
 df["shape"]   = df["shape"].astype(str).str.strip().str.lower()
 df["purpose"] = df["purpose"].astype(str).str.strip().str.lower()   # fashion/sports
 df["sex"]     = df["sex"].astype(str).str.strip().str.lower()       # male/female/unisex
-for c in ["lens","bridc","total_r"]:
+for c in ["lens_mm","bridge_mm","total_mm"]:
     df[c] = pd.to_numeric(df[c], errors="coerce")
 
 bad = df.loc[~df["shape"].isin(SHAPES6), ["product_id","brand","shape"]]
