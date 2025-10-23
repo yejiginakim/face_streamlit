@@ -15,3 +15,4 @@ mediapipe==0.10.14
 
 # protobuf은 TF가 3.20<=,<6 선호 — 최신 pip가 적절히 잡아줌(문제시 아래 라인 해제)
 # protobuf==4.25.3
+openpyxl>=3.1.2,<4
