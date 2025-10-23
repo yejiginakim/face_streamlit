@@ -156,8 +156,16 @@ with st.sidebar:
     st.subheader("🎚️ 위치/스케일(미세조정)")
     st.session_state.dx = st.slider("수평 오프셋(px)", -400, 400, st.session_state.dx)
     st.session_state.dy = st.slider("수직 오프셋(px)", -400, 400, st.session_state.dy)
-    st.session_state.scale_mult = st.slider("스케일(배)", 0.2, 2.0, float(st.session_state.scale_mult), 0.01,
-                                        help="자동 스케일 기준에서 크게/작게 폭넓게 조정")
+    st.session_state.scale_mult = st.slider("스케일(배)", 0.7, 1.3, st.session_state.scale_mult, 0.01)
+
+    # ★ 추가: 스케일 기준 모드
+    st.session_state.scale_mode = st.radio(
+        "스케일 기준",
+        ["PD↔GCD(권장)", "PD↔TOTAL(강제)", "볼폭↔TOTAL(강제)"],
+        index=0,
+        help="• PD↔GCD: 동공간거리=렌즈중심간거리로 맞춤\n• PD↔TOTAL: 프레임 전체 폭을 PD와 같게 강제\n• 볼폭↔TOTAL: 프레임 전체 폭을 볼폭에 맞춤"
+    )
+
 
 colL, colR = st.columns(2)
 with colL:
@@ -464,7 +472,8 @@ st.session_state.TOTAL_mm = float(TOTAL)
 # =============================
 # =============================
 # =============================
-# 10) 합성 — PD 정확 정합 + 폭/높이 캡
+# =============================
+# 10) 합성 — 스케일 모드별 계산 + 안전 캡
 # =============================
 face_bgr = st.session_state.face_bgr
 fg_bgra  = st.session_state.fg_bgra
@@ -473,50 +482,56 @@ roll     = float(st.session_state.roll or 0.0)
 pitch    = float(st.session_state.pitch or 0.0)
 
 # 탐지값
-PD_px = st.session_state.PD_px_auto        # 동공 간 거리(px)
-Cw_px = st.session_state.Cw_px_auto        # 볼폭(px)
-NC_px = st.session_state.NC_px_auto        # 코끝↔턱(px)
+PD_px = st.session_state.PD_px_auto
+Cw_px = st.session_state.Cw_px_auto
+NC_px = st.session_state.NC_px_auto
 
-# 프레임 스펙/원본 크기
-k      = float(st.session_state.k_ratio or 2.0)            # TOTAL / GCD
+# 프레임 메타/크기
+k      = float(st.session_state.k_ratio or 2.0)     # TOTAL/GCD
 TOTAL  = float(st.session_state.TOTAL_mm or 140.0)
 GCD    = TOTAL / k if k else (float(row["lens_mm"]) + float(row["bridge_mm"]))
 h_face, w_face = face_bgr.shape[:2]
 h0, w0 = fg_bgra.shape[:2]
+mode   = st.session_state.scale_mode
 eps = 1e-6
 
-# 1) PD로 '렌즈 중심간 거리(GCD)'를 정확히 맞춤
-#    프레임 이미지에서 GCD가 차지하는 픽셀 = w0 * (GCD / TOTAL)
+# ---------- 1) 모드별 '기준 스케일' ----------
 scale = None
-if PD_px and PD_px > 1 and GCD > 0 and TOTAL > 0 and w0 > 0:
+if mode == "PD↔GCD(권장)" and PD_px and GCD > 0 and TOTAL > 0 and w0 > 0:
+    # 프레임 이미지에서 GCD가 차지하는 픽셀 폭
     gcd_px_in_image = w0 * (GCD / TOTAL)
-    scale = float(PD_px / max(gcd_px_in_image, eps))   # ← 보정계수 없이 1:1 정합
+    scale = float(PD_px / max(gcd_px_in_image, eps))     # PD(px) == GCD(px)
 
-# 2) 폴백(탐지 실패 시): 총가로를 얼굴에 안전하게 맞춤
+elif mode == "PD↔TOTAL(강제)" and PD_px and w0 > 0:
+    # 프레임 전체폭을 PD와 '동일'하게 강제
+    scale = float(PD_px / w0)
+
+elif mode == "볼폭↔TOTAL(강제)" and Cw_px and w0 > 0:
+    # 프레임 전체폭을 볼폭과 동일(또는 약간 작게) 강제
+    BETA = 0.95   # 0.95로 살짝 여유
+    scale = float((BETA * Cw_px) / w0)
+
+# 탐지 실패 시 보수적 기본값
 if scale is None:
-    # 총가로 ≤ 볼폭 0.85배 또는 화면폭 0.80배 중 더 작은 값
-    total_cap_px = min(
-        (0.85 * Cw_px) if (Cw_px and Cw_px > 1) else float("inf"),
-        0.80 * w_face
-    )
-    scale = float(total_cap_px / max(w0, 1))
+    scale = (0.70 * w_face) / max(w0, 1)
 
-# 3) 폭 상한을 한 번 더 적용해 과대 방지
-total_cap_px2 = min(
-    (0.88 * Cw_px) if (Cw_px and Cw_px > 1) else float("inf"),
+# ---------- 2) 폭/높이 안전 캡 ----------
+# 폭 상한: 프레임 총가로 ≤ min(0.90×볼폭, 0.85×화면폭)
+max_total_px = min(
+    (0.90 * Cw_px) if (Cw_px and Cw_px > 1) else float("inf"),
     0.85 * w_face
 )
-scale = min(scale, total_cap_px2 / max(w0, 1))
+scale = min(scale, max_total_px / max(w0, 1))
 
-# 4) 높이 캡: 선글라스 높이 ≤ (코↔턱)×0.62 (없으면 얼굴 세로×0.38)
+# 높이 상한: 프레임 높이 ≤ (코↔턱)×0.62 (없으면 얼굴세로×0.38)
 max_h = (0.62 * NC_px) if (NC_px and NC_px > 1) else (0.38 * h_face)
 scale = min(scale, max_h / max(h0, 1))
 
-# 5) 사용자 미세조정(사이드바)
+# 사용자 미세조정
 scale *= float(st.session_state.scale_mult)
 scale = float(np.clip(scale, 0.25, 1.60))
 
-# ---- 리사이즈/회전/합성 ----
+# ---------- 3) 리사이즈/회전/배치/합성 ----------
 new_size = (max(1, int(w0 * scale)), max(1, int(h0 * scale)))
 fg_scaled = cv2.resize(fg_bgra, new_size, interpolation=cv2.INTER_LINEAR)
 M = cv2.getRotationMatrix2D((fg_scaled.shape[1] / 2, fg_scaled.shape[0] / 2), -roll, 1.0)
@@ -542,7 +557,7 @@ gx_e = gx + margin_x
 gy_e = gy + margin_y
 
 out = vision.overlay_rgba(bg_expanded, fg_rot, gx_e, gy_e)
-show_image_bgr(
-    out,
-    caption=f"합성 — {row.get('brand','?')} / {row.get('product_id','?')} · {row.get('shape','?')} · FaceFor:{row.get('face_for') or 'Unknown'}"
-)
+show_image_bgr(out, caption=f"합성 — {row.get('brand','?')} / {row.get('product_id','?')} · {row.get('shape','?')} · FaceFor:{row.get('face_for') or 'Unknown'}")
+
+# (선택) 수치 확인용 로그
+st.caption(f"PD_px={PD_px:.1f} | Cw_px={Cw_px:.1f} | NC_px={NC_px:.1f} | scale={scale:.3f}")
