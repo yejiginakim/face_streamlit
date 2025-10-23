@@ -521,49 +521,38 @@ st.session_state.TOTAL_mm = float(TOTAL)
 
 # =============================
 # 9) 합성 — 자동 스케일(기본값 無), 폭/높이 캡, 슬라이더 반영
-# =============================
-face_bgr = st.session_state.face_bgr
-fg_bgra  = st.session_state.fg_bgra
-mid      = st.session_state.mid or (0, 0)
-roll     = float(st.session_state.roll or 0.0)
-pitch    = float(st.session_state.pitch or 0.0)
-PD_MM    = st.session_state.PD_MM_raw
-PD_px    = st.session_state.PD_px_auto
-Cw_px    = st.session_state.Cw_px_auto
-NC_px    = st.session_state.NC_px_auto
-k        = float(st.session_state.k_ratio or 2.0)
-TOTAL    = float(st.session_state.TOTAL_mm or 140.0)
 
-h_face, w_face = face_bgr.shape[:2]
-h0, w0 = fg_bgra.shape[:2]
 
-# -------- 목표 총가로(px) 결정 (CHEEK_MM 없어도 동작) --------
-GCD2PD_CAL = 0.92  # GCD(px) ≈ PD(px) / 0.92  ↔  TOTAL(px) = GCD(px)*k
+# -------- 목표 총가로(px) 결정 --------
+# 의미: PD_px가 있으면 그걸 '정답'으로 보고 TOTAL(px) = PD_px * k / 0.92
+# (PD_mm 입력 여부와 무관하게 같은 값이 됩니다. PD_mm은 mm/px 환산에 쓰지 않아도 됨)
+GCD2PD = 0.92  # PD ≈ 0.92 * GCD  =>  GCD = PD / 0.92
 
-target_total_px = None
+target_total_px_candidates = []
 
-if PD_MM is not None and PD_px is not None and PD_px > 1:
-    # PD(mm)와 PD_px를 직접 매칭 → mm_per_px 산출
-    mm_per_px = PD_MM / (PD_px / GCD2PD_CAL)
-    target_total_px = TOTAL / max(mm_per_px, 1e-6)
-elif PD_px is not None and PD_px > 1:
-    # 전적으로 자동 PD_px로 스케일
-    target_total_px = PD_px * GCD2PD_CAL * k
-elif Cw_px is not None:
-    target_total_px = 0.9 * Cw_px  # 볼폭의 90%
-else:
-    target_total_px = 0.8 * w_face  # 최후 수단
+if PD_px is not None and PD_px > 1:
+    pd_based = (PD_px / GCD2PD) * k
+    target_total_px_candidates.append(pd_based)
 
-# 폭 캡: 볼폭/화면폭
-if Cw_px is not None:
-    target_total_px = min(target_total_px, 0.95 * Cw_px)
-target_total_px = float(np.clip(target_total_px, 0.45 * w_face, 0.95 * w_face))
+# 볼폭/화면폭 기반 보수적 캡 (너무 커지는 케이스 방지)
+if Cw_px is not None and Cw_px > 1:
+    target_total_px_candidates.append(0.72 * Cw_px)   # 0.90 -> 0.72 로 낮춤
+target_total_px_candidates.append(0.78 * w_face)       # 화면 폭 대비 상한도 낮춤
+
+# 카탈로그 TOTAL(mm)만으로 환산하는 경로는 최후 수단으로만 사용 (없어도 OK)
+# (PD/볼폭이 없고, 얼굴 폭 mm도 없을 때)
+if not target_total_px_candidates:
+    target_total_px_candidates.append(0.7 * w_face)
+
+# 최종 목표 폭: 후보들 중 '가장 작은 값'을 사용 (보수적)
+target_total_px = float(min(target_total_px_candidates))
 
 # -------- 스케일 계산 (폭 기준 + 높이 캡) --------
 scale_by_width = target_total_px / max(w0, 1)
 
+# 높이 캡: 선글라스 높이 ≤ 코끝↔턱(얼굴 길이)의 0.68배 (0.80 → 0.68)
 if NC_px is not None and NC_px > 1:
-    max_h = 0.80 * NC_px
+    max_h = 0.68 * NC_px
     scale_by_height = max_h / max(h0, 1)
     scale = min(scale_by_width, scale_by_height)
 else:
@@ -572,6 +561,10 @@ else:
 # 사용자 미세 조정
 scale *= float(st.session_state.scale_mult)
 scale = float(np.clip(scale, 0.35, 2.0))
+
+
+
+
 
 # 리사이즈/회전
 new_size = (max(1, int(w0 * scale)), max(1, int(h0 * scale)))
