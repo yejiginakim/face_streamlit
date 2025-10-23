@@ -30,7 +30,7 @@ import sys, platform, glob, hashlib
 st.caption(f"Python: {sys.version.split()[0]} / Arch: {platform.machine()} / CWD: {os.getcwd()}")
 
 # =============================
-# 2) faceshape / vision / metrics 임포트 (이 시점!)
+# 2) faceshape / vision / metrics 임포트
 # =============================
 err_msgs = []
 try:
@@ -38,14 +38,12 @@ try:
         FaceShapeModel,
         apply_rules,
         decide_rule_vs_top2,
-        topk_from_probs,
-        top2_strings,
     )
 except Exception as e:
     err_msgs.append(f"faceshape 임포트 실패: {e}")
 
 try:
-    import vision  # detect_pd_px / cheek_width_px / nose_chin_length_px / overlay_rgba / ...
+    import vision  # detect_pd_px / cheek_width_px / overlay_rgba / (nose_chin_length_px 0/1)
 except Exception as e:
     err_msgs.append(f"vision 임포트 실패: {e}")
 
@@ -85,21 +83,52 @@ def _is_lfs_pointer(path:str)->bool:
 def file_md5(b: bytes)->str:
     return hashlib.md5(b).hexdigest()
 
+# nose-chin 길이 폴백 (vision에 함수가 없을 때)
+def _nose_chin_length_px_fallback(bgr):
+    try:
+        fm = vision.create_facemesh()
+        h, w = bgr.shape[:2]
+        rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+        res = fm.process(rgb)
+        if not res.multi_face_landmarks:
+            return None
+        lm = res.multi_face_landmarks[0].landmark
+        # mediapipe indices: nose tip=1, chin=152
+        nose = np.array([lm[1].x * w,   lm[1].y * h],  dtype=np.float32)
+        chin = np.array([lm[152].x * w, lm[152].y * h], dtype=np.float32)
+        return float(np.linalg.norm(chin - nose))
+    except Exception:
+        return None
+
+def nose_chin_length_px_safe(bgr):
+    if hasattr(vision, "nose_chin_length_px"):
+        try:
+            return vision.nose_chin_length_px(bgr)
+        except Exception:
+            pass
+    return _nose_chin_length_px_fallback(bgr)
+
 # =============================
 # 4) UI & 세션 상태
 # =============================
-st.title("🧍→🕶️ Antena_01 합성 — 실시간 추천(Top-2×2) + 슬라이더")
+st.title("🧍→🕶️ Antena_01 합성 — 실시간 추천(Top-2×2) + 자동스케일 + 슬라이더")
 
 defaults = {
     "img_key": None,            # 업로드 이미지 해시
     "face_bgr": None,
     "faceshape_label": None,    # 최종 1위 라벨(백업)
     "top2_labels": [],          # 얼굴형 Top-2
+    # 탐지 결과
     "mid": (0, 0),
     "roll": 0.0,
     "pitch": 0.0,
-    "CHEEK_MM": 150.0,
-    "PD_MM_raw": None,
+    "PD_px_auto": None,
+    "Cw_px_auto": None,
+    "NC_px_auto": None,
+    # 치수 입력(옵션)
+    "PD_MM_raw": None,          # 사용자가 넣은 PD(mm)
+    "CHEEK_MM": None,           # 얼굴폭(mm) — 미사용 가능
+    # 추천/선택
     "recs": [],                 # 추천 4개(dict): face_for 필드 포함
     "selected_pid": None,       # 현재 선택된 product_id
     "fg_bgra": None,            # 현재 선택 프레임 이미지(BGRA)
@@ -112,46 +141,20 @@ for k, v in defaults.items():
     st.session_state.setdefault(k, v)
 
 with st.sidebar:
-    st.subheader("📱 iPhone/URL 측정값")
-    def _qget(name):
-        v = st.query_params.get(name)
-        if isinstance(v, list): v = v[0]
-        return v
-    def _qfloat(name):
-        v = _qget(name)
-        try: return float(v) if v not in (None, "", "None") else None
-        except: return None
-    def _qbool(name, default=False):
-        v = _qget(name)
-        if v is None: return default
-        return str(v).lower() in ("1", "true", "yes", "on")
-
-    use_phone_default = _qbool("use_phone", default=False)
-    use_phone = st.checkbox("iPhone/URL 측정값 사용", value=use_phone_default, key="use_phone_ck")
-
-    PD_MM_raw_q       = _qfloat("pd_mm") or _qfloat("pd")
-    CHEEK_MM_raw_q    = _qfloat("cheek_mm") or _qfloat("cheek")
-    NOSECHIN_MM_raw_q = _qfloat("nosechin_mm") or _qfloat("nosechin")
-
-    DEFAULT_CHEEK_MM = st.session_state.CHEEK_MM or 150.0
-    if use_phone and (CHEEK_MM_raw_q is not None):
-        CHEEK_MM = CHEEK_MM_raw_q
+    st.subheader("📱 치수 입력(선택)")
+    use_phone = st.checkbox("PD(mm) 직접 입력", value=False, help="체크하면 아래 PD(mm)를 사용하고, 안하면 자동 PD_px로 스케일합니다.")
+    if use_phone:
+        pd_in = st.number_input("PD(mm)", value=62.0, step=0.1, format="%.1f")
+        st.session_state.PD_MM_raw = float(pd_in)
     else:
-        CHEEK_MM = st.number_input("얼굴 폭(mm)", value=float(DEFAULT_CHEEK_MM), step=0.5)
+        st.session_state.PD_MM_raw = None
 
-    if use_phone and (PD_MM_raw_q is not None):
-        PD_MM = PD_MM_raw_q
-    else:
-        pd_in = st.number_input("PD(mm) (옵션)", value=0.0, step=0.1, format="%.1f")
-        PD_MM = pd_in if pd_in > 0 else None
-
-    if CHEEK_MM is not None:
-        CHEEK_MM = float(min(max(CHEEK_MM, 100.0), 220.0))
-    if PD_MM is not None:
-        PD_MM = float(min(max(PD_MM, 45.0), 75.0))
-
-    st.session_state.CHEEK_MM = float(CHEEK_MM)
-    st.session_state.PD_MM_raw = float(PD_MM) if PD_MM is not None else None
+    # (참고용) 얼굴폭(mm)은 더이상 필수 아님 — 미입력 가능
+    cheek_opt = st.text_input("얼굴 폭(mm, 옵션)", value="", placeholder="입력 안해도 됨")
+    try:
+        st.session_state.CHEEK_MM = float(cheek_opt) if cheek_opt.strip() else None
+    except:
+        st.session_state.CHEEK_MM = None
 
     st.divider()
     st.subheader("🎚️ 스케일/오프셋 (오버레이만 갱신)")
@@ -308,9 +311,8 @@ if refresh:
             top2_labels = []
     # 백업/중복 제거
     st.session_state.faceshape_label = final_label
-    if final_label:
-        if final_label not in top2_labels:
-            top2_labels = [final_label] + top2_labels
+    if final_label and final_label not in top2_labels:
+        top2_labels = [final_label] + top2_labels
     st.session_state.top2_labels = [lbl for i,lbl in enumerate(top2_labels) if top2_labels.index(lbl) == i][:2]
 
     # 3) 카탈로그 로드 & 추천 4개 구성 (Top-2 × 각 2개)
@@ -365,9 +367,9 @@ if refresh:
     seed = int(np.random.randint(0, 1_000_000))
     for li, face_lbl in enumerate(st.session_state.top2_labels or [None]):
         shapes = get_shape_targets(face_lbl, kset)
-        # 주모양 우선, 부족하면 보조 모양
         wanted = 2
         chosen = []
+
         def _pick(shape_name, take, seed_base):
             pool = cand[cand["shape"] == shape_name]
             if "sports" in kset:
@@ -395,7 +397,6 @@ if refresh:
         if len(chosen) < wanted and len(shapes) >= 2:
             chosen += _pick(shapes[1], wanted - len(chosen), seed + li*100 + 50)
 
-        # face_lbl 표시를 함께 보관
         for r in chosen[:wanted]:
             r["face_for"] = face_lbl
         recs += chosen[:wanted]
@@ -410,11 +411,17 @@ if refresh:
         recs += extra
     st.session_state.recs = recs[:4]
 
-    # 탐지(중심/자세) - 한 번만
+    # 4) 탐지(중심/자세/지표) - 한 번만 저장
     try:
         pd_px, eye_roll_deg, mid = vision.detect_pd_px(st.session_state.face_bgr)
     except Exception:
         pd_px = None; eye_roll_deg = 0.0; mid = (0,0)
+    Cw_px = None
+    try:
+        Cw_px = vision.cheek_width_px(st.session_state.face_bgr)
+    except Exception:
+        Cw_px = None
+    NC_px = nose_chin_length_px_safe(st.session_state.face_bgr)
 
     yaw = pitch = roll = None
     if hasattr(vision, "head_pose_ypr"):
@@ -425,9 +432,12 @@ if refresh:
     if roll is None:
         roll = eye_roll_deg
 
-    st.session_state.mid   = mid
-    st.session_state.roll  = float(roll or 0.0)
-    st.session_state.pitch = float(pitch or 0.0)
+    st.session_state.mid        = mid
+    st.session_state.roll       = float(roll or 0.0)
+    st.session_state.pitch      = float(pitch or 0.0)
+    st.session_state.PD_px_auto = pd_px
+    st.session_state.Cw_px_auto = Cw_px
+    st.session_state.NC_px_auto = NC_px
 
 # =============================
 # 7) 추천 4개 단일 선택 → 즉시 합성
@@ -510,52 +520,56 @@ st.session_state.k_ratio = float(k)
 st.session_state.TOTAL_mm = float(TOTAL)
 
 # =============================
-# 9) 합성(슬라이더만 반영) — 폭/높이 캡으로 얼굴길이에 맞춤
+# 9) 합성 — 자동 스케일(기본값 無), 폭/높이 캡, 슬라이더 반영
 # =============================
 face_bgr = st.session_state.face_bgr
 fg_bgra  = st.session_state.fg_bgra
 mid      = st.session_state.mid or (0, 0)
 roll     = float(st.session_state.roll or 0.0)
 pitch    = float(st.session_state.pitch or 0.0)
-CHEEK_MM = float(st.session_state.CHEEK_MM or 150.0)
 PD_MM    = st.session_state.PD_MM_raw
+PD_px    = st.session_state.PD_px_auto
+Cw_px    = st.session_state.Cw_px_auto
+NC_px    = st.session_state.NC_px_auto
 k        = float(st.session_state.k_ratio or 2.0)
 TOTAL    = float(st.session_state.TOTAL_mm or 140.0)
 
 h_face, w_face = face_bgr.shape[:2]
 h0, w0 = fg_bgra.shape[:2]
 
-# mm→px
-mm_per_px = CHEEK_MM / max(w_face, 1e-6)
+# -------- 목표 총가로(px) 결정 (CHEEK_MM 없어도 동작) --------
+GCD2PD_CAL = 0.92  # GCD(px) ≈ PD(px) / 0.92  ↔  TOTAL(px) = GCD(px)*k
 
-# (1) 기본 목표 총가로(px)
-if PD_MM is not None:
-    # PD(mm)->GCD(px)->TOTAL(px) (보정계수 0.92 역산)
-    target_total_px = (PD_MM / 0.92) * k / max(mm_per_px, 1e-6)
-else:
+target_total_px = None
+
+if PD_MM is not None and PD_px is not None and PD_px > 1:
+    # PD(mm)와 PD_px를 직접 매칭 → mm_per_px 산출
+    mm_per_px = PD_MM / (PD_px / GCD2PD_CAL)
     target_total_px = TOTAL / max(mm_per_px, 1e-6)
+elif PD_px is not None and PD_px > 1:
+    # 전적으로 자동 PD_px로 스케일
+    target_total_px = PD_px * GCD2PD_CAL * k
+elif Cw_px is not None:
+    target_total_px = 0.9 * Cw_px  # 볼폭의 90%
+else:
+    target_total_px = 0.8 * w_face  # 최후 수단
 
-# (2) 얼굴 기반 상한: 볼폭/화면폭/얼굴길이 캡
-Cw_px = vision.cheek_width_px(face_bgr)           # 볼폭(px)
-NC_px = vision.nose_chin_length_px(face_bgr)      # 코끝↔턱(px)
-
-# 폭 캡: 볼폭의 0.95배와 화면폭 0.95배 중 더 작은 값
+# 폭 캡: 볼폭/화면폭
 if Cw_px is not None:
     target_total_px = min(target_total_px, 0.95 * Cw_px)
-target_total_px = float(np.clip(target_total_px, 0.50 * w_face, 0.95 * w_face))
+target_total_px = float(np.clip(target_total_px, 0.45 * w_face, 0.95 * w_face))
 
-# (3) 스케일(폭 기준)
+# -------- 스케일 계산 (폭 기준 + 높이 캡) --------
 scale_by_width = target_total_px / max(w0, 1)
 
-# 높이 캡: 선글라스 높이 ≤ 얼굴길이(코↔턱)의 0.80배
-if NC_px is not None:
+if NC_px is not None and NC_px > 1:
     max_h = 0.80 * NC_px
     scale_by_height = max_h / max(h0, 1)
     scale = min(scale_by_width, scale_by_height)
 else:
     scale = scale_by_width
 
-# 사용자 미세조정
+# 사용자 미세 조정
 scale *= float(st.session_state.scale_mult)
 scale = float(np.clip(scale, 0.35, 2.0))
 
