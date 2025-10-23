@@ -49,12 +49,40 @@ except Exception as e:
 # =============================
 # 3) 유틸
 # =============================
+# =============================
+# 3) 유틸  (호환 가능한 st.image 래퍼)
+# =============================
+import inspect
+
 def show_image_bgr(img_bgr, **kwargs):
+    """
+    Streamlit 버전에 따라 use_container_width / use_column_width를 자동 선택.
+    """
     try:
         rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
-        st.image(rgb, use_container_width=True, **kwargs)
     except Exception as e:
-        st.error(f"이미지 표시 중 오류: {e}")
+        st.error(f"이미지 RGB 변환 오류: {e}")
+        return
+
+    # st.image 시그니처에서 지원 파라미터 확인
+    try:
+        params = set(inspect.signature(st.image).parameters.keys())
+    except Exception:
+        params = set()
+
+    try:
+        if "use_container_width" in params:
+            st.image(rgb, use_container_width=True, **kwargs)
+        elif "use_column_width" in params:
+            st.image(rgb, use_column_width=True, **kwargs)
+        else:
+            st.image(rgb, **kwargs)
+    except TypeError:
+        # 혹시 남아 있는 호환성 이슈 대비: 강제 기본 호출
+        try:
+            st.image(rgb, **kwargs)
+        except Exception as e:
+            st.error(f"이미지 표시 중 오류: {e}")
 
 def _is_lfs_pointer(path:str)->bool:
     try:
