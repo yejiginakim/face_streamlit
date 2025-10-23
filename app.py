@@ -495,7 +495,7 @@ fg_bgra = vision.make_lens_transparent_auto(fg_bgra, s_max=90, v_max=130, alpha_
 # 이후 스케일/회전/합성
 fg_bgra = vision.rotate_bgra_keep_bounds(fg_bgra, -roll)  # 회전 크롭 방지 버전
 fg_bgra = vision.trim_transparent(fg_bgra, pad=8)
-ㄴ
+
 st.session_state.fg_bgra = fg_bgra
 
 # 프레임 치수/비율
