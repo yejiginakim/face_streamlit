@@ -523,34 +523,57 @@ st.session_state.TOTAL_mm = float(TOTAL)
 # 9) 합성 — 자동 스케일(기본값 無), 폭/높이 캡, 슬라이더 반영
 
 
-# -------- 목표 총가로(px) 결정 --------
-# 의미: PD_px가 있으면 그걸 '정답'으로 보고 TOTAL(px) = PD_px * k / 0.92
-# (PD_mm 입력 여부와 무관하게 같은 값이 됩니다. PD_mm은 mm/px 환산에 쓰지 않아도 됨)
-GCD2PD = 0.92  # PD ≈ 0.92 * GCD  =>  GCD = PD / 0.92
 
+
+# =============================
+# 9) 합성 — 자동 스케일(기본값 無), 폭/높이 캡, 슬라이더 반영
+# =============================
+
+# 9-1) 세션 → 로컬 바인딩
+face_bgr = st.session_state.face_bgr
+fg_bgra  = st.session_state.fg_bgra
+mid      = st.session_state.mid or (0, 0)
+roll     = float(st.session_state.roll or 0.0)
+pitch    = float(st.session_state.pitch or 0.0)
+
+# 자동 탐지 지표
+PD_px = st.session_state.PD_px_auto        # pupils distance (px)
+Cw_px = st.session_state.Cw_px_auto        # cheek width (px)
+NC_px = st.session_state.NC_px_auto        # nose–chin length (px)
+
+# 선택 프레임 치수 비율
+k        = float(st.session_state.k_ratio or 2.0)
+TOTAL    = float(st.session_state.TOTAL_mm or 140.0)  # (참고용) mm 값, 이번 블록에서는 직접 사용 안함
+
+# 크기 정보
+h_face, w_face = face_bgr.shape[:2]
+h0, w0 = fg_bgra.shape[:2]
+
+# -------- 목표 총가로(px) 결정 --------
+# PD_px가 있으면: TOTAL(px) = (PD_px / 0.92) * k
+GCD2PD = 0.92
 target_total_px_candidates = []
 
 if PD_px is not None and PD_px > 1:
     pd_based = (PD_px / GCD2PD) * k
     target_total_px_candidates.append(pd_based)
 
-# 볼폭/화면폭 기반 보수적 캡 (너무 커지는 케이스 방지)
+# 볼폭/화면폭 기반 보수적 상한
 if Cw_px is not None and Cw_px > 1:
-    target_total_px_candidates.append(0.72 * Cw_px)   # 0.90 -> 0.72 로 낮춤
-target_total_px_candidates.append(0.78 * w_face)       # 화면 폭 대비 상한도 낮춤
+    target_total_px_candidates.append(0.72 * Cw_px)    # 0.90 → 0.72로 낮춤
+target_total_px_candidates.append(0.78 * w_face)        # 화면 폭 상한
 
-# 카탈로그 TOTAL(mm)만으로 환산하는 경로는 최후 수단으로만 사용 (없어도 OK)
-# (PD/볼폭이 없고, 얼굴 폭 mm도 없을 때)
+# 어떤 후보도 없으면 안전한 기본치
 if not target_total_px_candidates:
-    target_total_px_candidates.append(0.7 * w_face)
+    target_total_px_candidates.append(0.70 * w_face)
 
-# 최종 목표 폭: 후보들 중 '가장 작은 값'을 사용 (보수적)
+# 최종 목표 폭 = 후보 중 최솟값(보수적)
 target_total_px = float(min(target_total_px_candidates))
 
 # -------- 스케일 계산 (폭 기준 + 높이 캡) --------
 scale_by_width = target_total_px / max(w0, 1)
 
-# 높이 캡: 선글라스 높이 ≤ 코끝↔턱(얼굴 길이)의 0.68배 (0.80 → 0.68)
+# 높이 캡: 선글라스 높이 ≤ (코끝↔턱) * 0.68
 if NC_px is not None and NC_px > 1:
     max_h = 0.68 * NC_px
     scale_by_height = max_h / max(h0, 1)
@@ -562,11 +585,7 @@ else:
 scale *= float(st.session_state.scale_mult)
 scale = float(np.clip(scale, 0.35, 2.0))
 
-
-
-
-
-# 리사이즈/회전
+# 9-2) 리사이즈/회전
 new_size = (max(1, int(w0 * scale)), max(1, int(h0 * scale)))
 fg_scaled = cv2.resize(fg_bgra, new_size, interpolation=cv2.INTER_LINEAR)
 M = cv2.getRotationMatrix2D((fg_scaled.shape[1] / 2, fg_scaled.shape[0] / 2), -roll, 1.0)
@@ -575,7 +594,7 @@ fg_rot = cv2.warpAffine(
     flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=(0,0,0,0)
 )
 
-# 위치
+# 9-3) 배치(중심/피치 보정)
 pitch_dy = int((pitch or 0.0) * 0.8)
 if mid == (0, 0):
     gx = int(face_bgr.shape[1] * 0.5 - fg_rot.shape[1] * 0.5) + st.session_state.dx
@@ -585,7 +604,7 @@ else:
     gx = int(mid[0] - fg_rot.shape[1] * anchor) + st.session_state.dx
     gy = int(mid[1] - fg_rot.shape[0] * 0.50) + st.session_state.dy + pitch_dy
 
-# 여백 붙여 안전 합성
+# 9-4) 여백 붙여 합성
 margin_x, margin_y = 300, 150
 bg_expanded = cv2.copyMakeBorder(
     face_bgr, margin_y, margin_y, margin_x, margin_x,
@@ -599,6 +618,8 @@ show_image_bgr(
     out,
     caption=f"합성 — 선택: {row.get('brand','?')} / {row.get('product_id','?')} · {row.get('shape','?')} · FaceFor:{row.get('face_for') or 'Unknown'}"
 )
+
+
 
 # 다운로드
 try:
