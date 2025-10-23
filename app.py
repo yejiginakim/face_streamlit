@@ -160,12 +160,11 @@ with st.sidebar:
     st.subheader("🎛️ 스케일 기준 (자동)")
     scale_mode = st.radio(
         "스케일 기준",
-        ["PD↔GCD(권장)", "PD↔TOTAL(강제)", "눈폭↔TOTAL(강제)", "볼폭↔TOTAL(강제)"],
+        ["PD↔GCD(권장)", "PD↔TOTAL(강제)", "눈폭↔TOTAL(강제)"],
         index=2,
-        help="· PD↔GCD: PD로 GCD를 맞추고 TOTAL은 k(=TOTAL/GCD)로 변환\n"
-             "· PD↔TOTAL: PD에서 바로 TOTAL(px) 산출\n"
-             "· 눈폭↔TOTAL: 바깥 눈꼬리(33↔263) 폭에 총너비를 맞춤\n"
-             "· 볼폭↔TOTAL: 234↔454 볼폭 비례"
+        help="· PD(권장): PD로 GCD를 맞추고 TOTAL은 k(=TOTAL/GCD)로 변환\n"
+             "· 눈폭↔TOTAL: 바깥 눈꼬리(33↔263) 폭에 총너비를 맞춤"
+             
     )
     st.session_state.scale_mode = scale_mode
 
@@ -560,21 +559,18 @@ mode = st.session_state.get("scale_mode", "눈폭↔TOTAL(강제)")
 GCD2PD = 0.92  # PD ≈ 0.92 * GCD
 
 # --- 목표 TOTAL 폭(px) 산출 ---
-if mode == "PD↔GCD(권장)" and PD_px and PD_px > 1 and (GCD and GCD > 0):
+if mode == "PD(권장)" and PD_px and PD_px > 1 and (GCD and GCD > 0):
     gcd_px_target   = PD_px / GCD2PD
     total_target_px = gcd_px_target * k
 
-elif mode == "PD↔TOTAL(강제)" and PD_px and PD_px > 1:
-    total_target_px = (PD_px / GCD2PD) * k
+
 
 elif mode == "눈폭↔TOTAL(강제)" and Eye_px and Eye_px > 1:
     # 눈 라인 얼굴폭에 총너비를 직접 비례
     BETA = 1.55   # 작아 보이면 1.60~1.70로 살짝 올리세요
     total_target_px = Eye_px * BETA
 
-elif mode == "볼폭↔TOTAL(강제)" and Cw_px and Cw_px > 1:
-    ALPHA = 0.85
-    total_target_px = Cw_px * ALPHA
+
 
 else:
     total_target_px = 0.72 * w_face  # 폴백
