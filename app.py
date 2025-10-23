@@ -482,12 +482,20 @@ img_path = _resolve_image(row)
 if not img_path:
     st.error(f"프레임 파일을 찾지 못했습니다: {row.get('product_id')}"); st.stop()
 
-fg_bgra = vision.ensure_bgra(img_path)
-if fg_bgra is None:
-    st.error(f"프레임 이미지를 읽을 수 없습니다: {img_path}"); st.stop()
 
-fg_bgra = vision.remove_white_to_alpha(fg_bgra, thr=240)
+fg_bgra = vision.ensure_bgra(img_path)
+fg_bgra = vision.remove_white_to_alpha(fg_bgra, thr=235)  # 필요시 230~240 튜닝
+fg_bgra = vision.trim_transparent(fg_bgra, pad=12)
+
+# 👇 렌즈 투명화(둘 중 하나 선택)
+fg_bgra = vision.make_lens_transparent_auto(fg_bgra, s_max=90, v_max=130, alpha_mul=0.55)
+# 또는
+# fg_bgra = vision.make_lens_transparent_gray(fg_bgra, gray_tol=18, v_max=135, alpha_mul=0.60)
+
+# 이후 스케일/회전/합성
+fg_bgra = vision.rotate_bgra_keep_bounds(fg_bgra, -roll)  # 회전 크롭 방지 버전
 fg_bgra = vision.trim_transparent(fg_bgra, pad=8)
+ㄴ
 st.session_state.fg_bgra = fg_bgra
 
 # 프레임 치수/비율

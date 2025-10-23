@@ -32,6 +32,33 @@ import cv2
 from functools import lru_cache
 
 
+def make_lens_transparent_auto(bgra: np.ndarray,
+                               s_max: int = 90,   # 채도 상한(렌즈는 채도 낮은 경우 多)
+                               v_max: int = 130,  # 명도 상한(렌즈는 어두움)
+                               alpha_mul: float = 0.55) -> np.ndarray:
+    """
+    BGRA에서 '어둡고 채도 낮은' 픽셀을 렌즈로 간주하고 알파(투명도)를 낮춥니다.
+    alpha_mul: 0.0~1.0 (작을수록 더 투명)
+    """
+    if bgra is None or bgra.ndim != 3 or bgra.shape[2] != 4:
+        return bgra
+    bgr = bgra[:, :, :3]
+    a   = bgra[:, :, 3]
+
+    hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
+    H, S, V = hsv[:, :, 0], hsv[:, :, 1], hsv[:, :, 2]
+
+    # 렌즈 후보: 어둡고(=V 낮음) 채도도 낮은(=S 낮음) 영역 + 이미 불투명한 영역
+    lens_mask = (S <= s_max) & (V <= v_max) & (a > 0)
+
+    out = bgra.copy()
+    a2 = out[:, :, 3].astype(np.float32)
+    a2[lens_mask] = (a2[lens_mask] * alpha_mul).clip(0, 255)
+    out[:, :, 3] = a2.astype(np.uint8)
+    return out
+
+
+
 def rotate_bgra_keep_bounds(bgra: np.ndarray, angle_deg: float) -> np.ndarray:
     h, w = bgra.shape[:2]
     cX, cY = w / 2.0, h / 2.0
