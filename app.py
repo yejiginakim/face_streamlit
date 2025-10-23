@@ -47,7 +47,7 @@ except Exception as e:
     err_msgs.append(f"faceshape 임포트 실패: {e}")
 
 try:
-    import vision  # vision.py: detect_pd_px / load_fixed_antena / overlay_rgba / ...
+    import vision  # vision.py: detect_pd_px / head_pose_ypr / overlay_rgba / ...
 except Exception as e:
     err_msgs.append(f"vision 임포트 실패: {e}")
 
@@ -180,9 +180,6 @@ if not run:
     st.info("성별/분류를 선택하고 '실행'을 누르면 얼굴형 분석과 추천이 시작됩니다.")
     st.stop()
 
-
-
-
 # =============================
 # 6) 얼굴 이미지 업로드
 # =============================
@@ -258,8 +255,8 @@ if faceshape_model is not None:
         # (C) 규칙 보정 + 재랭킹 🔧
         if any(v is not None for v in (ar, jaw, cw, jw)):
             adj = apply_rules(                                      # 🔧 보정 실행
-            probs, faceshape_model.class_names,
-            ar=ar, jaw_deg=jaw, cw=cw, jw=jw
+                probs, faceshape_model.class_names,
+                ar=ar, jaw_deg=jaw, cw=cw, jw=jw
             )
             probs_adj = adj['rule_probs']
             top2_adj  = topk_from_probs(probs_adj, faceshape_model.class_names)
@@ -292,31 +289,44 @@ if faceshape_model is not None:
 
 st.session_state["faceshape_label"] = final_label
 
-
-
 # =============================
 # 5) 프레임 로드 (엑셀 카탈로그 · 최소 규칙 + sports시 shield)
 # =============================
-import os, random
+import random
 import pandas as pd
 
-EXCEL_PATH = "sg_df.xlsx"  # 카탈로그 경로
+EXCEL_PATH = "sg_df.xlsx"  # 카탈로그 경로 (앱 폴더에 두는 것을 권장)
 
-# 6개 모양 고정
-SHAPES6 = {"Round","Rectangular","Trapezoid","Aviator","Cat-eye","Shield"}
+# 6개 모양 고정 (소문자 통일)
+SHAPES6 = {"round","rectangular","trapezoid","aviator","cat-eye","shield"}
 
-# 얼굴형 → 최소 추천 모양(우선순위)
+# 얼굴형 → 최소 추천 모양(우선순위) (소문자 통일)
 FRAME_RULES_ORDERED = {
-    "Oval":   ["Trapezoid","Rectangular"],
-    "Round":  ["Rectangular"],
-    "Square": ["Round"],
-    "Oblong": ["Rectangular","Trapezoid"],
-    "Heart":  ["Cat-eye","Round"],
+    "Oval":   ["trapezoid","rectangular"],
+    "Round":  ["rectangular"],
+    "Square": ["round"],
+    "Oblong": ["rectangular","trapezoid"],
+    "Heart":  ["cat-eye","round"],
 }
 MAX_SHAPES_PER_FACE = 1   # 너무 많지 않게 1개만 (원하면 2로)
 
 def _norm(x):
     return (x or "").strip().lower()
+
+# --- shape 표준화 함수 ---
+def normalize_shape(s: str) -> str:
+    if not isinstance(s, str):
+        return ""
+    t = s.strip().lower().replace("_","-")
+    t = " ".join(t.split()).replace(" ", "-")  # 'cat eye' -> 'cat-eye'
+    syn = {
+        "cateye":"cat-eye", "cat":"cat-eye",
+        "rectangle":"rectangular", "rect":"rectangular",
+        "wayfarer":"trapezoid", "trap":"trapezoid",
+        "wrap":"shield", "wraparound":"shield",
+        "circle":"round", "pilot":"aviator",
+    }
+    return syn.get(t, t)
 
 # 0) 엑셀 로드
 try:
@@ -333,7 +343,10 @@ for c in need_cols:
         st.stop()
 
 # 2) 전처리/검증
-
+#    - product_id 문자열 고정(이미지 매칭 안전)
+df["product_id"] = df["product_id"].astype(str).str.strip()
+#    - shape 정규화 + 소문자
+df["shape"]   = df["shape"].astype(str).map(normalize_shape)
 df["purpose"] = df["purpose"].astype(str).str.strip().str.lower()   # fashion/sports
 df["sex"]     = df["sex"].astype(str).str.strip().str.lower()       # male/female/unisex
 for c in ["lens_mm","bridge_mm","total_mm"]:
@@ -341,8 +354,8 @@ for c in ["lens_mm","bridge_mm","total_mm"]:
 
 bad = df.loc[~df["shape"].isin(SHAPES6), ["product_id","brand","shape"]]
 if len(bad) > 0:
-    st.error("shape 값은 round/rectangular/trapezoid/aviator/cat-eye/shield 만 허용됩니다.")
-    st.dataframe(bad)
+    st.error("shape 값은 round/rectangular/trapezoid/aviator/cat-eye/shield 만 허용됩니다. (아래 미일치 항목 확인)")
+    st.dataframe(bad.head(50))
     st.stop()
 
 # 3) 성별/분류 1차 필터
@@ -362,6 +375,7 @@ label = st.session_state.get("faceshape_label", final_label)
 
 if label in FRAME_RULES_ORDERED:
     ok_shapes = list(FRAME_RULES_ORDERED[label][:MAX_SHAPES_PER_FACE])
+    ok_shapes = [s.lower() for s in ok_shapes]  # 소문자 기준 필터
 
     # sports 선택 시, 일부 얼굴형에 한해 shield 추가 (최대 2유형로 제한)
     if 'sports' in kset and 'shield' not in ok_shapes:
@@ -382,7 +396,7 @@ row = cand.sample(1, random_state=random.randint(0,10_000)).iloc[0].to_dict()
 
 # 6) 이미지 경로 결정: image_path 우선, 없으면 product_id.* 탐색
 # === 이미지 경로 해결(이미지 폴더 없음 버전) ===
-import os, glob
+import glob as _glob
 
 FRAME_ROOT = "frame"  # 최상위 폴더만 사용
 
@@ -425,13 +439,11 @@ def _resolve_image(row: dict) -> str | None:
 
     # 2) 최후 수단: 전역 재귀 탐색
     pattern = os.path.join(FRAME_ROOT, "**", pid + ".*")
-    for cp in glob.glob(pattern, recursive=True):
+    for cp in _glob.glob(pattern, recursive=True):
         if os.path.splitext(cp)[1].lower() in EXTS and os.path.isfile(cp):
             return cp
 
     return None
-
-
 
 img_path = _resolve_image(row)
 if not img_path:
@@ -446,8 +458,10 @@ if fg_bgra is None:
     st.error(f"프레임 이미지를 읽을 수 없습니다: {img_path}")
     st.stop()
 
-# 8) 치수 세팅
-A, DBL, TOTAL = float(row["lens"]), float(row["bridc"]), float(row["total_r"])
+# 8) 치수 세팅  (엑셀 컬럼: lens_mm, bridge_mm, total_mm)
+A     = float(row["lens_mm"])      # 렌즈 가로(mm)
+DBL   = float(row["bridge_mm"])    # 브리지(mm)
+TOTAL = float(row["total_mm"])     # 전체 가로(mm)
 dims = (A, DBL, TOTAL)
 GCD = A + DBL
 k = (TOTAL / GCD) if GCD else 2.0
@@ -457,7 +471,6 @@ st.caption(
     f"shape={row.get('shape','?')} · A={A}, DBL={DBL}, TOTAL={TOTAL} "
     f"(GCD={GCD}, k=TOTAL/GCD={k:.3f})"
 )
-
 
 # =============================
 # 8) PD/자세/스케일/합성
@@ -533,6 +546,7 @@ max_w = 0.95 * w_face
 if Cw_px is not None:
     min_w = max(min_w, 0.70 * Cw_px)
     max_w = min(max_w, 0.98 * Cw_px)
+
 target_total_px = float(np.clip(target_total_px, min_w, max_w))
 
 scale = (target_total_px / max(w0, 1)) * float(scale_mult)
@@ -577,7 +591,7 @@ try:
     buf = BytesIO()
     PIL.Image.fromarray(rgb).save(buf, format="PNG")
     st.download_button("결과 PNG 다운로드", data=buf.getvalue(),
-                       file_name="SF191SKN_004_61.png", mime="image/png")
+                       file_name="result.png", mime="image/png")
 except Exception as e:
     st.warning(f"다운로드 준비 중 경고: {e}")
 
