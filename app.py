@@ -378,23 +378,66 @@ if len(cand) == 0:
     st.stop()
 
 # 5) 후보 중 랜덤 1개 선택
-row = cand.sample(1, random_state=random.randint(0, 10_000)).iloc[0].to_dict()
+row = cand.sample(1, random_state=random.randint(0,10_000)).iloc[0].to_dict()
 
 # 6) 이미지 경로 결정: image_path 우선, 없으면 product_id.* 탐색
-def _resolve_image(row: dict):
+# === 이미지 경로 해결(이미지 폴더 없음 버전) ===
+import os, glob
+
+FRAME_ROOT = "frame"  # 최상위 폴더만 사용
+
+# shape 값 -> 실제 폴더명 매핑 (엑셀은 소문자/하이픈, 폴더는 대문자/언더스코어)
+SHAPE_DIR_MAP = {
+    "aviator":     "Aviator",
+    "cat-eye":     "Cat_eye",
+    "rectangular": "Rectangular",
+    "round":       "Round",
+    "shield":      "Shield",
+    "trapezoid":   "Trapezoid",
+}
+EXTS = (".png", ".webp", ".avif", ".jpg", ".jpeg")
+
+def _resolve_image(row: dict) -> str | None:
+    """
+    우선순위:
+      1) row['image_path']가 실제 존재
+      2) frame/{ShapeDir}/{product_id}.*
+      3) frame/**/{product_id}.*  (최후 수단: 재귀 탐색)
+    """
+    # 0) 명시 경로 우선
     p = (row.get("image_path") or "").strip()
     if p and os.path.exists(p):
         return p
-    base = os.path.join("frames","images", str(row["product_id"]).strip())
-    for ext in (".png",".webp",".avif",".jpg",".jpeg"):
-        cp = base + ext
-        if os.path.exists(cp):
+
+    pid = str(row.get("product_id", "")).strip()
+    if not pid:
+        return None
+
+    # 1) shape 폴더에서 찾기
+    shape_val = str(row.get("shape", "")).strip().lower()
+    shape_dir = SHAPE_DIR_MAP.get(shape_val)
+    if shape_dir:
+        base = os.path.join(FRAME_ROOT, shape_dir, pid)
+        for ext in EXTS:
+            cp = base + ext
+            if os.path.exists(cp):
+                return cp
+
+    # 2) 최후 수단: 전역 재귀 탐색
+    pattern = os.path.join(FRAME_ROOT, "**", pid + ".*")
+    for cp in glob.glob(pattern, recursive=True):
+        if os.path.splitext(cp)[1].lower() in EXTS and os.path.isfile(cp):
             return cp
+
     return None
+
+
 
 img_path = _resolve_image(row)
 if not img_path:
-    st.error(f"이미지 파일을 찾을 수 없습니다: frames/images/{row['product_id']}.[png|webp|avif|jpg]")
+    st.error(
+        f"이미지를 찾지 못했습니다: frame/<Aviator|Cat_eye|Rectangular|Round|Shield|Trapezoid>/{row['product_id']}.[png|webp|avif|jpg|jpeg]"
+    )
     st.stop()
 
 # 7) 프레임 이미지 로드 (BGRA 보장)
