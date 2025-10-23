@@ -2,9 +2,9 @@
 # 0) 백엔드/로그 환경변수 먼저 고정
 # =============================
 import os
-os.environ.setdefault("KERAS_BACKEND", "tensorflow")  # Keras 3 백엔드 -> TF
-os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"              # (선택) TF 로그 억제
-os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")     # (선택) CPU 강제
+os.environ.setdefault("KERAS_BACKEND", "tensorflow")  # Keras 3 -> TF
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"              # TF 로그 억제
+os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")     # CPU 강제
 
 # =============================
 # 1) 핵심 라이브러리 임포트 & 버전 확인
@@ -70,26 +70,42 @@ def show_image_bgr(img_bgr, **kwargs):
     except Exception as e:
         st.error(f"이미지 표시 중 오류: {e}")
 
+def _is_lfs_pointer(path:str)->bool:
+    try:
+        if not os.path.isfile(path):
+            return False
+        if os.path.getsize(path) > 2048:
+            return False
+        with open(path, "rb") as f:
+            head = f.read(256)
+        return (b"git-lfs" in head) or (b"github.com/spec" in head)
+    except Exception:
+        return False
+
 # =============================
 # 4) UI & 세션 상태
 # =============================
-st.title("🧍→🕶️ Antena_01 합성 (GCD 앵커) — 잠금 후 슬라이더만")
+st.title("🧍→🕶️ Antena_01 합성 (GCD 앵커) — 잠금 후 슬라이더만 + 추천 선택")
 
-# 세션 키 초기화 (무거운 단계는 '잠금' 때만 실행)
-for k, v in {
+# 세션 키 기본값
+defaults = {
     "locked": False,
     "faceshape_label": None,
-    "row": None,                 # 추천된 프레임 row(dict)
-    "face_bgr": None,            # 원본 얼굴 이미지 (BGR)
-    "fg_bgra": None,             # 전처리된 프레임 PNG (BGRA)
+    "face_bgr": None,
     "mid": (0, 0),
     "roll": 0.0,
     "pitch": 0.0,
-    "k_ratio": 2.0,
-    "TOTAL_mm": None,
     "CHEEK_MM": 150.0,
     "PD_MM_raw": None,
-}.items():
+    "recs": [],                 # 추천 리스트(최대 4개) dict 배열
+    "selected_pid": None,       # 사용자가 고른 product_id
+    "fg_bgra": None,            # 현재 선택된 프레임 이미지 (BGRA)
+    "k_ratio": 2.0,             # TOTAL/GCD
+    "TOTAL_mm": None,           # 선택 프레임 TOTAL(mm)
+    # 슬라이더
+    "dx": 0, "dy": 0, "scale_mult": 1.0,
+}
+for k, v in defaults.items():
     st.session_state.setdefault(k, v)
 
 with st.sidebar:
@@ -117,19 +133,19 @@ with st.sidebar:
     use_phone_default = _qbool("use_phone", default=False)
     use_phone = st.checkbox("iPhone/URL 측정값 사용", value=use_phone_default, key="use_phone_ck")
 
-    PD_MM_raw       = _qfloat("pd_mm") or _qfloat("pd")
-    CHEEK_MM_raw    = _qfloat("cheek_mm") or _qfloat("cheek")
-    NOSECHIN_MM_raw = _qfloat("nosechin_mm") or _qfloat("nosechin")
+    PD_MM_raw_q       = _qfloat("pd_mm") or _qfloat("pd")
+    CHEEK_MM_raw_q    = _qfloat("cheek_mm") or _qfloat("cheek")
+    NOSECHIN_MM_raw_q = _qfloat("nosechin_mm") or _qfloat("nosechin")
 
     DEFAULT_CHEEK_MM = st.session_state.CHEEK_MM or 150.0
 
-    if use_phone and (CHEEK_MM_raw is not None):
-        CHEEK_MM = CHEEK_MM_raw
+    if use_phone and (CHEEK_MM_raw_q is not None):
+        CHEEK_MM = CHEEK_MM_raw_q
     else:
         CHEEK_MM = st.number_input("얼굴 폭(mm)", value=float(DEFAULT_CHEEK_MM), step=0.5)
 
-    if use_phone and (PD_MM_raw is not None):
-        PD_MM = PD_MM_raw
+    if use_phone and (PD_MM_raw_q is not None):
+        PD_MM = PD_MM_raw_q
     else:
         pd_in = st.number_input("PD(mm) (옵션)", value=0.0, step=0.1, format="%.1f")
         PD_MM = pd_in if pd_in > 0 else None
@@ -143,10 +159,9 @@ with st.sidebar:
 
     st.divider()
     st.subheader("🎚️ 스케일/오프셋 (합성은 고정, 오버레이만 갱신)")
-    # 슬라이더는 항상 즉시 적용 — 하지만 오버레이만 다시 그린다
-    dx = st.slider("수평 오프셋(px)", -400, 400, 0, key="dx")
-    dy = st.slider("수직 오프셋(px)", -400, 400, 0, key="dy")
-    scale_mult = st.slider("스케일(배)", 0.5, 2.0, 1.0, key="scale_mult")
+    st.session_state.dx = st.slider("수평 오프셋(px)", -400, 400, st.session_state.dx, key="dx_sl")
+    st.session_state.dy = st.slider("수직 오프셋(px)", -400, 400, st.session_state.dy, key="dy_sl")
+    st.session_state.scale_mult = st.slider("스케일(배)", 0.5, 2.0, st.session_state.scale_mult, key="scale_sl")
 
 colL, colR = st.columns(2)
 with colL:
@@ -157,19 +172,76 @@ with colR:
     use_gender = st.multiselect('성별', ['female', 'male', 'unisex'], placeholder='선택하세요', key="gender_ms")
     use_kind = st.multiselect('분류', ['fashion', 'sports'], placeholder='선택하세요', key="kind_ms")
 
-# 제어 버튼: 잠금/해제
+# 제어 버튼
 lock = st.button('🔒 잠금(한 번만 무거운 계산)')
 unlock = st.button('🔓 잠금 해제(다시 준비)')
 if unlock:
-    for k in ["locked","row","face_bgr","fg_bgra","mid","roll","pitch","k_ratio","TOTAL_mm","faceshape_label"]:
-        st.session_state[k] = None if k not in ("locked",) else False
+    # 슬라이더는 유지, 나머지 리셋
+    keep_vals = {"dx": st.session_state.dx, "dy": st.session_state.dy, "scale_mult": st.session_state.scale_mult}
+    for k in list(st.session_state.keys()):
+        if k in keep_vals:
+            continue
+        st.session_state[k] = defaults.get(k, None)
+    st.session_state.locked = False
     st.rerun()
 
 # =============================
-# 잠금 시 1회만: 무거운 단계 실행 → 세션에 저장
+# 추천/정규화 규칙
+# =============================
+def normalize_shape(s: str) -> str:
+    """엑셀 shape을 6종으로 매핑"""
+    if not isinstance(s, str):
+        return ""
+    t = s.strip().lower().replace("_","-")
+    t = " ".join(t.split()).replace(" ", "-")
+    syn = {
+        "round":"round", "circle":"round", "boston":"round", "panto":"round", "oval":"round",
+        "rect":"rectangular", "rectangle":"rectangular", "rectangular":"rectangular", "square":"rectangular",
+        "flat-top":"rectangular", "clubmaster":"rectangular",
+        "trapezoid":"trapezoid", "wayfarer":"trapezoid", "browline":"trapezoid", "geometric":"trapezoid",
+        "aviator":"aviator", "pilot":"aviator", "teardrop":"aviator",
+        "cat-eye":"cat-eye", "cateye":"cat-eye", "cats-eye":"cat-eye", "butterfly":"cat-eye",
+        "shield":"shield", "wrap":"shield", "wraparound":"shield", "mask":"shield", "visor":"shield",
+    }
+    return syn.get(t, t)
+
+BASE_SHAPES_BY_FACE = {
+    "Oval":   ["trapezoid", "rectangular"],
+    "Round":  ["rectangular", "trapezoid"],
+    "Square": ["round", "trapezoid"],
+    "Oblong": ["rectangular", "trapezoid"],
+    "Heart":  ["cat-eye", "round"],
+}
+
+def get_shape_targets(face_label: str | None, kinds: set[str]) -> list[str]:
+    base = BASE_SHAPES_BY_FACE.get(face_label, ["rectangular", "trapezoid"])
+    base = list(base)
+    if "sports" in kinds:
+        if face_label in ("Oval","Round","Oblong","Square"):
+            if "shield" in base:
+                base.remove("shield")
+            base.insert(0, "shield")
+        else:
+            if "shield" not in base:
+                base.append("shield")
+    uniq = []
+    for s in base:
+        if s not in uniq:
+            uniq.append(s)
+    return uniq[:2]
+
+def pick_from_pool(pool_df, n, seed=None):
+    if len(pool_df) <= 0:
+        return []
+    take = min(n, len(pool_df))
+    rng = np.random.default_rng(seed)
+    idxs = rng.choice(pool_df.index.to_numpy(), size=take, replace=False)
+    return pool_df.loc[idxs].to_dict(orient="records")
+
+# =============================
+# 5) 잠금 시 1회: 무거운 단계 실행 → 세션 저장
 # =============================
 if lock:
-    # 0) 필수 체크
     if not (img_file and use_gender and use_kind):
         st.error("사진 업로드, 성별/분류 선택이 필요합니다.")
         st.stop()
@@ -185,23 +257,10 @@ if lock:
         st.error(f"얼굴 이미지 로드 실패: {e}")
         st.stop()
 
-    # 2) 얼굴형 추론 (있으면)
+    # 2) 얼굴형 추론(있으면)
     MODEL_PATH   = "models/faceshape_efficientnetB4_best_20251018_223855.keras"
     CLASSES_PATH = "models/classes_20251018_223855.txt"
     IMG_SIZE     = (224, 224)
-
-    def _is_lfs_pointer(path:str)->bool:
-        try:
-            if not os.path.isfile(path):
-                return False
-            if os.path.getsize(path) > 2048:
-                return False
-            with open(path, "rb") as f:
-                head = f.read(256)
-            return (b"git-lfs" in head) or (b"github.com/spec" in head)
-        except Exception:
-            return False
-
     faceshape_model = None
     if os.path.isfile(MODEL_PATH) and os.path.isfile(CLASSES_PATH) and not _is_lfs_pointer(MODEL_PATH):
         try:
@@ -230,20 +289,11 @@ if lock:
             final_label = None
     st.session_state.faceshape_label = final_label
 
-    # 3) 카탈로그 로드 & 프레임 1회 선택
+    # 3) 카탈로그 로드 & 추천 4개 구성
     import pandas as pd
     EXCEL_PATH = "sg_df.xlsx"
     SHAPES6 = {"round","rectangular","trapezoid","aviator","cat-eye","shield"}
-    def _norm(x):
-        return (x or "").strip().lower()
-
-    def normalize_shape(s: str) -> str:
-        if not isinstance(s, str):
-            return ""
-        t = s.strip().lower().replace("_","-")
-        t = " ".join(t.split()).replace(" ", "-")
-        syn = {"cateye":"cat-eye","rectangle":"rectangular","rect":"rectangular","wayfarer":"trapezoid","wrap":"shield","circle":"round","pilot":"aviator"}
-        return syn.get(t, t)
+    def _norm(x): return (x or "").strip().lower()
 
     try:
         df = pd.read_excel(EXCEL_PATH)
@@ -251,12 +301,15 @@ if lock:
         st.error(f"엑셀 카탈로그 로드 실패: {e}")
         st.stop()
 
-    need_cols = ["product_id","brand","shape","purpose","sex","lens_mm","bridge_mm","total_mm","image_path"]
+    # 필수 컬럼(이미지 경로는 optional)
+    need_cols = ["product_id","brand","shape","purpose","sex","lens_mm","bridge_mm","total_mm"]
     for c in need_cols:
         if c not in df.columns:
             st.error(f"엑셀에 '{c}' 컬럼이 없습니다.")
             st.stop()
+    has_image_path = "image_path" in df.columns
 
+    # 전처리
     df["product_id"] = df["product_id"].astype(str).str.strip()
     df["shape"]   = df["shape"].astype(str).map(normalize_shape)
     df["purpose"] = df["purpose"].astype(str).str.strip().str.lower()
@@ -277,105 +330,56 @@ if lock:
         f &= df["sex"].isin(gset) | (df["sex"] == "unisex")
     if kset:
         f &= df["purpose"].isin(kset)
-
     cand = df[f].copy()
 
-    FRAME_RULES_ORDERED = {
-        "Oval":   ["trapezoid","rectangular"],
-        "Round":  ["rectangular"],
-        "Square": ["round"],
-        "Oblong": ["rectangular","trapezoid"],
-        "Heart":  ["cat-eye","round"],
-    }
-    MAX_SHAPES_PER_FACE = 1
+    # 얼굴형 -> 타깃 모양 2개
+    target_shapes = get_shape_targets(st.session_state.faceshape_label, kset)
 
-    label = st.session_state.faceshape_label
-    if label in FRAME_RULES_ORDERED:
-        ok_shapes = [s for s in FRAME_RULES_ORDERED[label][:MAX_SHAPES_PER_FACE]]
-        if 'sports' in kset and 'shield' not in ok_shapes and label in ('Oval','Round','Oblong'):
-            ok_shapes.append('shield')
-            ok_shapes = ok_shapes[:2]
-        pool = cand[cand["shape"].isin(set(ok_shapes))]
-        if len(pool) > 0:
-            cand = pool
+    # 각 모양당 2개(스포츠/패션 우선) → 최대 4개
+    recs = []
+    seed = int(np.random.randint(0, 1_000_000))
+    for i, shp in enumerate(target_shapes):
+        pool = cand[cand["shape"] == shp]
+        if "sports" in kset:
+            pool_s = pool[pool["purpose"] == "sports"]
+            chosen = pick_from_pool(pool_s, 2, seed + i*10)
+            if len(chosen) < 2:
+                pool_f = pool[pool["purpose"] == "fashion"]
+                chosen += pick_from_pool(
+                    pool_f[~pool_f["product_id"].isin([c["product_id"] for c in chosen])],
+                    2 - len(chosen),
+                    seed + i*10 + 1
+                )
+        else:
+            pool_f = pool[pool["purpose"] == "fashion"]
+            chosen = pick_from_pool(pool_f, 2, seed + i*10)
+            if len(chosen) < 2:
+                pool_s = pool[pool["purpose"] == "sports"]
+                chosen += pick_from_pool(
+                    pool_s[~pool_s["product_id"].isin([c["product_id"] for c in chosen])],
+                    2 - len(chosen),
+                    seed + i*10 + 1
+                )
+        recs.extend(chosen)
 
-    if len(cand) == 0:
-        st.error("조건(성별/분류/얼굴형)에 맞는 프레임을 찾지 못했습니다.")
+    if len(recs) < 4:
+        already = set([r["product_id"] for r in recs])
+        remain_pool = cand[~cand["product_id"].isin(already)]
+        recs += pick_from_pool(remain_pool, 4 - len(recs), seed + 999)
+
+    recs = recs[:4]
+    if len(recs) == 0:
+        st.error("추천할 프레임을 찾지 못했습니다. 필터를 완화해 보세요.")
         st.stop()
 
-    row = cand.sample(1, random_state=np.random.randint(0, 10_000)).iloc[0].to_dict()
-    st.session_state.row = row
-
-    # 4) 프레임 이미지 로드 & 전처리 (한 번만)
-    import glob as _glob
-    FRAME_ROOT = "frame"
-    SHAPE_DIR_MAP = {
-        "aviator":     "Aviator",
-        "cat-eye":     "Cat_eye",
-        "rectangular": "Rectangular",
-        "round":       "Round",
-        "shield":      "Shield",
-        "trapezoid":   "Trapezoid",
-    }
-    EXTS = (".png", ".webp", ".avif", ".jpg", ".jpeg")
-
-    def _resolve_image(row: dict) -> str | None:
-        p = (row.get("image_path") or "").strip()
-        if p and os.path.exists(p):
-            return p
-        pid = str(row.get("product_id", "")).strip()
-        if not pid:
-            return None
-        shape_val = str(row.get("shape", "")).strip().lower()
-        shape_dir = SHAPE_DIR_MAP.get(shape_val)
-        if shape_dir:
-            base = os.path.join(FRAME_ROOT, shape_dir, pid)
-            for ext in EXTS:
-                cp = base + ext
-                if os.path.exists(cp):
-                    return cp
-        pattern = os.path.join(FRAME_ROOT, "**", pid + ".*")
-        for cp in _glob.glob(pattern, recursive=True):
-            if os.path.splitext(cp)[1].lower() in EXTS and os.path.isfile(cp):
-                return cp
-        return None
-
-    img_path = _resolve_image(row)
-    if not img_path:
-        st.error(
-            f"이미지를 찾지 못했습니다: frame/<Aviator|Cat_eye|Rectangular|Round|Shield|Trapezoid>/{row['product_id']}.[png|webp|avif|jpg|jpeg]"
-        )
-        st.stop()
-
-    fg_bgra = vision.ensure_bgra(img_path)
-    if fg_bgra is None:
-        st.error(f"프레임 이미지를 읽을 수 없습니다: {img_path}")
-        st.stop()
-
-    # 전처리 (한 번만)
-    fg_bgra = vision.remove_white_to_alpha(fg_bgra, thr=240)
-    fg_bgra = vision.trim_transparent(fg_bgra, pad=8)
-    st.session_state.fg_bgra = fg_bgra
-
-    # 치수/비율 (한 번만)
-    A     = float(row["lens_mm"])      # 렌즈 가로(mm)
-    DBL   = float(row["bridge_mm"])    # 브리지(mm)
-    TOTAL = float(row["total_mm"])     # 전체 가로(mm)
-    GCD = A + DBL
-    k = (TOTAL / GCD) if GCD else 2.0
-    st.session_state.k_ratio = float(k)
-    st.session_state.TOTAL_mm = float(TOTAL)
-    st.session_state.CHEEK_MM = float(CHEEK_MM)
-    st.session_state.PD_MM_raw = float(PD_MM) if PD_MM is not None else None
+    st.session_state.recs = recs
 
     # PD/자세 1회 계산
-    pd_px = None
-    mid = (0, 0)
-    eye_roll_deg = 0.0
+    PD_MM_local = PD_MM
     try:
         pd_px, eye_roll_deg, mid = vision.detect_pd_px(st.session_state.face_bgr)
     except Exception:
-        pass
+        pd_px = None; eye_roll_deg = 0.0; mid = (0,0)
 
     yaw = pitch = roll = None
     if hasattr(vision, "head_pose_ypr"):
@@ -386,21 +390,101 @@ if lock:
     if roll is None:
         roll = eye_roll_deg
 
-    st.session_state.mid = mid
-    st.session_state.roll = float(roll or 0.0)
+    st.session_state.mid   = mid
+    st.session_state.roll  = float(roll or 0.0)
     st.session_state.pitch = float(pitch or 0.0)
+    st.session_state.CHEEK_MM = float(CHEEK_MM)
+    st.session_state.PD_MM_raw = float(PD_MM_local) if PD_MM_local is not None else None
 
     st.session_state.locked = True
-    st.success("🔒 잠금 완료 — 이제 슬라이더만 움직여도 합성은 고정, 선글라스만 이동/스케일 조정됩니다.")
+    st.success("🔒 잠금 완료 — 얼굴형 분석/추천/탐지는 고정됩니다. 아래에서 추천 중 합성할 프레임을 고르고, 슬라이더로 위치/크기를 조절하세요.")
 
 # =============================
-# 잠금 이후: 오버레이만 갱신 (가벼운 경로)
+# 6) 잠금 이후 — 추천 목록에서 선택 + 가벼운 합성
 # =============================
 if not st.session_state.locked:
-    st.info("사진/카테고리 선택 후 **잠금**을 누르세요. 이후엔 슬라이더만으로 오버레이를 바꿉니다.")
+    st.info("사진/카테고리 선택 후 **잠금**을 누르세요. 이후엔 추천 4개가 뜨고, 선택/슬라이더만으로 합성이 갱신됩니다.")
     st.stop()
 
-# 가벼운 합성 경로(슬라이더 변경 때마다 실행되지만, 무거운 단계는 건드리지 않음)
+# 추천 4개 보여주고 선택받기 (multiselect 이지만 1개만 반영)
+recs = st.session_state.recs or []
+pretty_items = [f"{i+1}) [{r.get('purpose','?')}] {r.get('brand','?')} / {r.get('product_id','?')}  · {r.get('shape','?')}  · {int(r.get('total_mm',0))}mm"
+                for i, r in enumerate(recs)]
+st.markdown("### 😀 얼굴형/카테고리에 맞춰 추천 드립니다. 합성할 제품을 선택하세요.")
+sel = st.multiselect("추천 (최대 4개 중 선택)", options=pretty_items, default=pretty_items[:1])
+
+# 선택된 첫 항목 기준으로 합성할 row 결정
+row = None
+if sel:
+    idx = pretty_items.index(sel[0])
+    row = recs[idx]
+else:
+    row = recs[0]  # 아무것도 안 고르면 첫 번째
+
+# 선택 프레임 이미지 로드(가벼움) + 전처리
+import glob as _glob
+FRAME_ROOT = "frame"
+SHAPE_DIR_MAP = {
+    "aviator":     "Aviator",
+    "cat-eye":     "Cat_eye",
+    "rectangular": "Rectangular",
+    "round":       "Round",
+    "shield":      "Shield",
+    "trapezoid":   "Trapezoid",
+}
+EXTS = (".png", ".webp", ".avif", ".jpg", ".jpeg")
+
+def _resolve_image(row: dict) -> str | None:
+    # image_path가 있으면 우선 사용 (optional)
+    p = (row.get("image_path") or "").strip() if "image_path" in row else ""
+    if p and os.path.exists(p):
+        return p
+    pid = str(row.get("product_id", "")).strip()
+    if not pid:
+        return None
+    shape_val = str(row.get("shape", "")).strip().lower()
+    shape_dir = SHAPE_DIR_MAP.get(shape_val)
+    if shape_dir:
+        base = os.path.join(FRAME_ROOT, shape_dir, pid)
+        for ext in EXTS:
+            cp = base + ext
+            if os.path.exists(cp):
+                return cp
+    # 최후 수단: 재귀 탐색
+    pattern = os.path.join(FRAME_ROOT, "**", pid + ".*")
+    for cp in _glob.glob(pattern, recursive=True):
+        if os.path.splitext(cp)[1].lower() in EXTS and os.path.isfile(cp):
+            return cp
+    return None
+
+img_path = _resolve_image(row)
+if not img_path:
+    st.error(
+        f"이미지를 찾지 못했습니다: frame/<Aviator|Cat_eye|Rectangular|Round|Shield|Trapezoid>/{row['product_id']}.[png|webp|avif|jpg|jpeg]"
+    )
+    st.stop()
+
+fg_bgra = vision.ensure_bgra(img_path)
+if fg_bgra is None:
+    st.error(f"프레임 이미지를 읽을 수 없습니다: {img_path}")
+    st.stop()
+
+# 전처리 (가벼움)
+fg_bgra = vision.remove_white_to_alpha(fg_bgra, thr=240)
+fg_bgra = vision.trim_transparent(fg_bgra, pad=8)
+st.session_state.fg_bgra = fg_bgra
+
+# 선택 프레임 치수/비율
+A     = float(row["lens_mm"])
+DBL   = float(row["bridge_mm"])
+TOTAL = float(row["total_mm"])
+GCD = A + DBL
+k = (TOTAL / GCD) if GCD else 2.0
+st.session_state.k_ratio = float(k)
+st.session_state.TOTAL_mm = float(TOTAL)
+st.session_state.selected_pid = row.get("product_id")
+
+# 합성(슬라이더 반영만)
 face_bgr = st.session_state.face_bgr
 fg_bgra  = st.session_state.fg_bgra
 mid      = st.session_state.mid or (0, 0)
@@ -414,12 +498,12 @@ TOTAL    = float(st.session_state.TOTAL_mm or 140.0)
 h_face, w_face = face_bgr.shape[:2]
 h0, w0 = fg_bgra.shape[:2]
 
-# 목표 폭 계산(잠금 시 저장된 치수만 사용)
+# 목표 폭 계산(잠금 시 고정된 수치만 사용)
+mm_per_px = CHEEK_MM / max(w_face, 1e-6)
 if PD_MM is not None:
-    mm_per_px = CHEEK_MM / max(w_face, 1e-6)
+    # PD(mm)->GCD(px)->TOTAL(px) (보정계수 0.92 반영 역산 주의)
     target_total_px = (PD_MM / (0.92)) * k / max(mm_per_px, 1e-6)
 else:
-    mm_per_px = CHEEK_MM / max(w_face, 1e-6)
     target_total_px = TOTAL / max(mm_per_px, 1e-6)
 
 min_w = 0.60 * w_face
@@ -427,14 +511,13 @@ max_w = 0.95 * w_face
 from math import isfinite
 if not isfinite(target_total_px):
     target_total_px = 0.8 * w_face
-
 target_total_px = float(np.clip(target_total_px, min_w, max_w))
 
-# 사용자가 주는 scale_mult만 반영
+# 슬라이더 스케일만 반영
 scale = (target_total_px / max(w0, 1)) * float(st.session_state.scale_mult)
 scale = float(np.clip(scale, 0.35, 2.2))
 
-# 리사이즈/회전만 수행 (빠름)
+# 리사이즈/회전
 new_size = (max(1, int(w0 * scale)), max(1, int(h0 * scale)))
 fg_scaled = cv2.resize(fg_bgra, new_size, interpolation=cv2.INTER_LINEAR)
 M = cv2.getRotationMatrix2D((fg_scaled.shape[1] / 2, fg_scaled.shape[0] / 2), -roll, 1.0)
@@ -452,25 +535,39 @@ else:
     gx = int(mid[0] - fg_rot.shape[1] * anchor) + st.session_state.dx
     gy = int(mid[1] - fg_rot.shape[0] * 0.50) + st.session_state.dy + pitch_dy
 
+# 여백붙여 안전 합성
 margin_x, margin_y = 300, 150
 bg_expanded = cv2.copyMakeBorder(
     face_bgr, margin_y, margin_y, margin_x, margin_x,
     cv2.BORDER_CONSTANT, value=(0, 0, 0)
 )
-
 gx_expanded = gx + margin_x
 gy_expanded = gy + margin_y
 
 out = vision.overlay_rgba(bg_expanded, fg_rot, gx_expanded, gy_expanded)
-show_image_bgr(out, caption="합성 결과 — 프레임/탐지 고정, 슬라이더만 반영")
+show_image_bgr(out, caption=f"합성 결과 — 선택: {row.get('brand','?')} / {row.get('product_id','?')}  · {row.get('shape','?')}")
 
+# 다운로드
 try:
     from io import BytesIO
     rgb = cv2.cvtColor(out, cv2.COLOR_BGR2RGB)
     buf = BytesIO()
     PIL.Image.fromarray(rgb).save(buf, format="PNG")
-    file_name = (st.session_state.row or {}).get('product_id', 'frame')
+    file_name = row.get('product_id', 'frame')
     st.download_button("결과 PNG 다운로드", data=buf.getvalue(), file_name=f"{file_name}_result.png", mime="image/png")
 except Exception as e:
     st.warning(f"다운로드 준비 중 경고: {e}")
+
+# 얼굴형 라벨 간단 코멘트
+final_label = st.session_state.faceshape_label
+if final_label:
+    rec_txt = {
+        "Oval":   "대부분의 프레임 OK (wayfarer/스퀘어/원형 등)",
+        "Round":  "각진 프레임 추천 (스퀘어/레트로 스퀘어)",
+        "Square": "곡선형/원형 추천 (원형/오벌/보스턴)",
+        "Oblong": "가로가 긴 타입 추천 (wayfarer/클럽마스터)",
+        "Heart":  "하부가 넓은 오벌/보스턴, 얇은 메탈 림",
+    }.get(final_label, "")
+    if rec_txt:
+        st.info(f"👓 얼굴형({final_label}) 추천: {rec_txt}")
 
