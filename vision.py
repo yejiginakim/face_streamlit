@@ -31,6 +31,28 @@ import numpy as np
 import cv2
 from functools import lru_cache
 
+
+def rotate_bgra_keep_bounds(bgra: np.ndarray, angle_deg: float) -> np.ndarray:
+    h, w = bgra.shape[:2]
+    cX, cY = w / 2.0, h / 2.0
+    M = cv2.getRotationMatrix2D((cX, cY), angle_deg, 1.0)
+
+    cos = abs(M[0, 0]); sin = abs(M[0, 1])
+    nW = int((h * sin) + (w * cos))
+    nH = int((h * cos) + (w * sin))
+
+    # 새 크기에 맞추도록 평행이동 보정
+    M[0, 2] += (nW / 2) - cX
+    M[1, 2] += (nH / 2) - cY
+
+    rot = cv2.warpAffine(
+        bgra, M, (nW, nH),
+        flags=cv2.INTER_LINEAR,
+        borderMode=cv2.BORDER_CONSTANT,
+        borderValue=(0, 0, 0, 0)
+    )
+    return rot
+
 # 눈높이에서의 얼굴 가로폭(px) — 간단/빠름: 234↔454
 def eye_band_width_px_simple(bgr: np.ndarray) -> float | None:
     try:

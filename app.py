@@ -562,10 +562,10 @@ scale = float(np.clip(scale, 0.10, 2.50))
 new_size = (max(1, int(w0 * scale)), max(1, int(h0 * scale)))
 fg_scaled = cv2.resize(fg_bgra, new_size, interpolation=cv2.INTER_LINEAR)
 M = cv2.getRotationMatrix2D((fg_scaled.shape[1] / 2, fg_scaled.shape[0] / 2), -roll, 1.0)
-fg_rot = cv2.warpAffine(
-    fg_scaled, M, (fg_scaled.shape[1], fg_scaled.shape[0]),
-    flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=(0,0,0,0)
-)
+
+fg_rot = vision.rotate_bgra_keep_bounds(fg_scaled, -roll)
+# 회전 후 남는 투명 여백 정리(선택)
+fg_rot = vision.trim_transparent(fg_rot, pad=8)
 
 pitch_dy = int((pitch or 0.0) * 0.8)
 if mid == (0, 0):
