@@ -124,7 +124,7 @@ def nose_chin_length_px_safe(bgr):
 # =============================
 # 4) 상태
 # =============================
-st.title("🧍→🕶️ Antena_01 — Top-2×2 추천 + 자동 스케일")
+st.title("🧍→🕶️ — Top-2×2 추천 + 자동 스케일")
 
 defaults = {
     "img_key": None,
@@ -149,15 +149,19 @@ defaults = {
     "dy": 0,
     "scale_mult": 1.0,
 }
+
+
+
+
 for k,v in defaults.items():
     st.session_state.setdefault(k, v)
 
 with st.sidebar:
-    st.subheader("🎛️ 스케일 기준")
+    st.subheader("🎛️ 스케일 기준 (자동)")
     scale_mode = st.radio(
         "스케일 기준",
         ["PD↔GCD(권장)", "PD↔TOTAL(강제)", "눈폭↔TOTAL(강제)", "볼폭↔TOTAL(강제)"],
-        index=2,  # 기본을 눈폭 기준으로
+        index=2,
         help="· PD↔GCD: PD로 GCD를 맞추고 TOTAL은 k(=TOTAL/GCD)로 변환\n"
              "· PD↔TOTAL: PD에서 바로 TOTAL(px) 산출\n"
              "· 눈폭↔TOTAL: 바깥 눈꼬리(33↔263) 폭에 총너비를 맞춤\n"
@@ -165,10 +169,19 @@ with st.sidebar:
     )
     st.session_state.scale_mode = scale_mode
 
-    st.subheader("🎚️ 위치/스케일(미세조정)")
-    st.session_state.dx = st.slider("수평 오프셋(px)", -400, 400, st.session_state.dx)
-    st.session_state.dy = st.slider("수직 오프셋(px)", -400, 400, st.session_state.dy)
-    st.session_state.scale_mult = st.slider("스케일(배)", 0.7, 1.3, st.session_state.scale_mult, 0.01)
+    st.subheader("🎚️ 위치/이동")
+    st.session_state.dx = st.slider("수평 오프셋(px)", -400, 400, st.session_state.get("dx", 0))
+    st.session_state.dy = st.slider("수직 오프셋(px)", -400, 400, st.session_state.get("dy", 0))
+
+    # ✅ 합성 후 ‘추가’ 조절 (세 가지)
+    st.subheader("🧩 합성 후 스케일(추가 조절)")
+    st.session_state.setdefault("scale_overall", 1.00)  # 전체 등비
+    st.session_state.setdefault("scale_x_only",  1.00)  # 가로만
+    st.session_state.setdefault("scale_y_only",  1.00)  # 세로만
+
+    st.session_state.scale_overall = st.slider("전체 크기", 0.50, 1.50, float(st.session_state.scale_overall), 0.01)
+    st.session_state.scale_x_only  = st.slider("가로만(폭)", 0.70, 1.30, float(st.session_state.scale_x_only), 0.01)
+    st.session_state.scale_y_only  = st.slider("세로만(높이)", 0.70, 1.30, float(st.session_state.scale_y_only), 0.01)
 
 
 
@@ -576,12 +589,17 @@ else:
 scale_h = max_h / max(h0, 1)
 
 scale = min(scale_w, scale_h)
-scale *= float(st.session_state.scale_mult)
 scale = float(np.clip(scale, 0.10, 2.50))
 
-# --- 리사이즈 (회전 없음: 전처리에서 이미 했음) ---
-new_size = (max(1, int(w0 * scale)), max(1, int(h0 * scale)))
-fg_scaled = cv2.resize(fg_bgra, new_size, interpolation=cv2.INTER_LINEAR)
+# ✅ 합성 후 ‘추가’ 조절(세 가지) 적용
+overall = float(st.session_state.get("scale_overall", 1.0))
+sx_only = float(st.session_state.get("scale_x_only",  1.0))
+sy_only = float(st.session_state.get("scale_y_only",  1.0))
+
+new_w = max(1, int(w0 * scale * overall * sx_only))
+new_h = max(1, int(h0 * scale * overall * sy_only))
+fg_scaled = cv2.resize(fg_bgra, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
+
 fg_rot = fg_scaled  # ✅ 회전 금지 (이미 전처리에서 keep-bounds 회전 완료)
 
 # --- 배치 ---
