@@ -333,7 +333,7 @@ for c in need_cols:
         st.stop()
 
 # 2) 전처리/검증
-df["shape"]   = df["shape"].astype(str).str.strip().str.lower()
+
 df["purpose"] = df["purpose"].astype(str).str.strip().str.lower()   # fashion/sports
 df["sex"]     = df["sex"].astype(str).str.strip().str.lower()       # male/female/unisex
 for c in ["lens_mm","bridge_mm","total_mm"]:
