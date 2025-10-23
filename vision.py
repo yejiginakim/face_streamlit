@@ -24,6 +24,29 @@ def create_facemesh():
     )
 
 
+
+# vision.py (아무 위치여도 되지만 이미지 유틸 위에 두는 걸 권장)
+
+def eye_span_px(bgr):
+    """
+    Mediapipe FaceMesh로 좌/우 바깥 눈꼬리(33, 263) 사이 가로거리(px).
+    실패 시 None.
+    """
+    try:
+        fm = create_facemesh()
+        h, w = bgr.shape[:2]
+        rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+        res = fm.process(rgb)
+        if not res.multi_face_landmarks:
+            return None
+        lm = res.multi_face_landmarks[0].landmark
+        L = np.array([lm[33].x * w,  lm[33].y * h], dtype=np.float32)   # left outer canthus
+        R = np.array([lm[263].x * w, lm[263].y * h], dtype=np.float32)  # right outer canthus
+        return float(np.linalg.norm(R - L))
+    except Exception:
+        return None
+
+
 # =========================
 # 얼굴 자세 / PD 계산
 # =========================
@@ -188,6 +211,10 @@ def remove_white_to_alpha(bgra: np.ndarray, thr: int = 240) -> np.ndarray:
     white = (b >= thr) & (g >= thr) & (r >= thr)
     a[white] = 0
     return cv2.merge([b, g, r, a])
+
+
+
+
 
 
 def trim_transparent(bgra: np.ndarray, pad: int = 6) -> np.ndarray:
