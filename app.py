@@ -303,15 +303,15 @@ import pandas as pd
 EXCEL_PATH = "sg_df.xlsx"  # 카탈로그 경로
 
 # 6개 모양 고정
-SHAPES6 = {"round","rectangular","trapezoid","aviator","cat-eye","shield"}
+SHAPES6 = {"Round","Rectangular","Trapezoid","Aviator","Cat-eye","Shield"}
 
 # 얼굴형 → 최소 추천 모양(우선순위)
 FRAME_RULES_ORDERED = {
-    "Oval":   ["trapezoid","rectangular"],
-    "Round":  ["rectangular"],
-    "Square": ["round"],
-    "Oblong": ["rectangular","trapezoid"],
-    "Heart":  ["cat-eye","round"],
+    "Oval":   ["Trapezoid","Rectangular"],
+    "Round":  ["Rectangular"],
+    "Square": ["Round"],
+    "Oblong": ["Rectangular","Trapezoid"],
+    "Heart":  ["Cat-eye","Round"],
 }
 MAX_SHAPES_PER_FACE = 1   # 너무 많지 않게 1개만 (원하면 2로)
 
