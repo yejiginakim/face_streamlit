@@ -384,30 +384,53 @@ if refresh:
 
     # 탐지 (PD/볼폭/코↔턱/자세)
     
+    
+        # ===== (기존 탐지 블록 전체 교체) =====
     # 탐지 (PD/볼폭/코↔턱/자세/눈폭)
     try:
         pd_px, eye_roll_deg, mid = vision.detect_pd_px(st.session_state.face_bgr)
     except Exception:
-        pd_px, eye_roll_deg, mid = None, 0.0, (0,0)
+        pd_px, eye_roll_deg, mid = None, 0.0, (0, 0)
 
+    # 볼폭
     try:
         Cw_px = vision.cheek_width_px(st.session_state.face_bgr)
     except Exception:
         Cw_px = None
 
-    NC_px  = nose_chin_length_px_safe(st.session_state.face_bgr)
-    Eye_px = None
+    # 코끝↔턱 길이
+    NC_px = nose_chin_length_px_safe(st.session_state.face_bgr)
+
+    # 눈 라인 폭(핵심)
     try:
-        Eye_px = vision.eye_span_px(st.session_state.face_bgr)   # 👈 추가
+        Eye_px = vision.eye_span_px(st.session_state.face_bgr)   # 👈 새 함수
     except Exception:
         Eye_px = None
 
-    # ... (roll, pitch 계산은 기존 그대로)
+    # 자세(roll/pitch)
+    yaw = pitch = roll = None
+    if hasattr(vision, "head_pose_ypr"):
+        try:
+            yaw, pitch, roll = vision.head_pose_ypr(st.session_state.face_bgr)
+        except Exception:
+            yaw = pitch = roll = None
+    if roll is None:
+        # 폴백: 눈 라인 기울기
+        try:
+            roll = vision.head_roll_angle(st.session_state.face_bgr)
+        except Exception:
+            roll = 0.0
 
+    st.session_state.mid   = mid
+    st.session_state.roll  = float(roll or 0.0)
+    st.session_state.pitch = float(pitch or 0.0)
     st.session_state.PD_px_auto  = pd_px
     st.session_state.Cw_px_auto  = Cw_px
     st.session_state.NC_px_auto  = NC_px
-    st.session_state.Eye_px_auto = Eye_px   # 👈 추가
+    st.session_state.Eye_px_auto = Eye_px
+    # =====================================
+
+   
 
 
 # =============================
@@ -479,7 +502,7 @@ st.session_state.TOTAL_mm = float(TOTAL)
 # =============================
 # =============================
 # 10) 합성 — 스케일 (라디오 반영)
-# =============================
+# ===== (기존 스케일 계산 블록 전체 교체) =====
 face_bgr = st.session_state.face_bgr
 fg_bgra  = st.session_state.fg_bgra
 mid      = st.session_state.mid or (0,0)
@@ -501,44 +524,41 @@ h0, w0 = fg_bgra.shape[:2]
 mode = st.session_state.get("scale_mode", "눈폭↔TOTAL(강제)")
 GCD2PD = 0.92  # PD ≈ 0.92 * GCD
 
-# ---- 목표 TOTAL 폭(px) 계산 ----
+# --- 목표 TOTAL 폭(px) ---
 if mode == "PD↔GCD(권장)" and PD_px and PD_px > 1 and GCD > 0:
-    gcd_px_target = PD_px / GCD2PD
+    gcd_px_target  = PD_px / GCD2PD
     total_target_px = gcd_px_target * k
 
 elif mode == "PD↔TOTAL(강제)" and PD_px and PD_px > 1:
     total_target_px = (PD_px / GCD2PD) * k
 
 elif mode == "눈폭↔TOTAL(강제)" and Eye_px and Eye_px > 1:
-    # 눈 바깥꼬리~바깥꼬리 폭에 맞춰서 선글라스 총너비를 강제
-    BETA = 1.35   # 1.25~1.45 사이 취향 조절 가능
+    # 눈 라인 얼굴폭에 '총너비'를 정확히 비례시킴
+    BETA = 1.55   # ← 크면 1.45~1.70 사이로 튜닝 (작게 보이면 더 키워)
     total_target_px = Eye_px * BETA
 
 elif mode == "볼폭↔TOTAL(강제)" and Cw_px and Cw_px > 1:
-    ALPHA = 0.80  # 볼폭 대비 총너비 비율
+    ALPHA = 0.85  # 볼폭 대비 총너비 비율(조금 더 큼)
     total_target_px = Cw_px * ALPHA
-
 else:
-    # 모든 지표 실패 시 화면 폭 대비 안전 기본값
-    total_target_px = 0.70 * w_face
+    total_target_px = 0.72 * w_face  # 완전 폴백
 
-# ---- 폭 기준 스케일 ----
+# --- 폭 기준 스케일 ---
 scale_w = total_target_px / max(w0, 1)
 
-# ---- 높이 캡: 선글라스 높이 ≤ 얼굴 길이 계수 ----
+# --- 높이 캡(세로 과대 방지) ---
 if NC_px and NC_px > 1:
-    H_CAP = 0.62   # 필요시 0.58~0.68 사이에서 조정
+    H_CAP = 0.72  # 0.68~0.80 사이에서 조절 가능 (작게 눌리면 ↑)
     max_h = H_CAP * NC_px
 else:
-    max_h = 0.40 * h_face
-
+    max_h = 0.45 * h_face
 scale_h = max_h / max(h0, 1)
 
 scale = min(scale_w, scale_h)
 scale *= float(st.session_state.scale_mult)
 scale = float(np.clip(scale, 0.10, 2.50))
 
-# ---- 리사이즈/회전/배치/합성 (기존 동일) ----
+# --- 리사이즈/회전/배치/합성 ---
 new_size = (max(1, int(w0 * scale)), max(1, int(h0 * scale)))
 fg_scaled = cv2.resize(fg_bgra, new_size, interpolation=cv2.INTER_LINEAR)
 M = cv2.getRotationMatrix2D((fg_scaled.shape[1] / 2, fg_scaled.shape[0] / 2), -roll, 1.0)
@@ -560,3 +580,4 @@ bg_expanded = cv2.copyMakeBorder(face_bgr, margin_y, margin_y, margin_x, margin_
                                  cv2.BORDER_CONSTANT, value=(0,0,0))
 out = vision.overlay_rgba(bg_expanded, fg_rot, gx + margin_x, gy + margin_y)
 show_image_bgr(out, caption=f"합성 — {row.get('brand','?')} / {row.get('product_id','?')} · {row.get('shape','?')} · FaceFor:{row.get('face_for') or 'Unknown'}")
+# =========================================

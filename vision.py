@@ -26,6 +26,62 @@ def create_facemesh():
 
 
 # vision.py (아무 위치여도 되지만 이미지 유틸 위에 두는 걸 권장)
+# vision.py에 추가
+import numpy as np
+import cv2
+from functools import lru_cache
+
+# 눈높이에서의 얼굴 가로폭(px) — 간단/빠름: 234↔454
+def eye_band_width_px_simple(bgr: np.ndarray) -> float | None:
+    try:
+        fm = create_facemesh()
+        h, w = bgr.shape[:2]
+        rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+        res = fm.process(rgb)
+        if not res.multi_face_landmarks:
+            return None
+        lm = res.multi_face_landmarks[0].landmark
+        L = np.array([lm[234].x * w, lm[234].y * h], dtype=np.float32)
+        R = np.array([lm[454].x * w, lm[454].y * h], dtype=np.float32)
+        return float(np.linalg.norm(R - L))
+    except Exception:
+        return None
+
+
+# 눈높이에서의 얼굴 가로폭(px) — 정밀: face_oval에서 눈높이 근처만 사용
+OVAL_IDX = [10,338,297,332,284,251,389,356,454,323,361,288,397,365,379,378,400,377,
+            152,148,176,149,150,136,172,58,132,93,234,127,162,21,54,103,67,109]
+
+def eye_band_width_px_oval(bgr: np.ndarray, band_ratio: float = 0.03) -> float | None:
+    """
+    band_ratio: 눈 y 근처에서 ±(band_ratio * 얼굴세로) 폭만 허용
+    """
+    try:
+        fm = create_facemesh()
+        h, w = bgr.shape[:2]
+        rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+        res = fm.process(rgb)
+        if not res.multi_face_landmarks:
+            return None
+        lm = res.multi_face_landmarks[0].landmark
+
+        # 눈높이(y): 바깥 눈꼬리(33, 263)의 평균 y
+        eye_y = (lm[33].y * h + lm[263].y * h) / 2.0
+        tol   = band_ratio * h
+
+        # 얼굴 타원 포인트 중에서 눈높이 근처만
+        xs = []
+        for i in OVAL_IDX:
+            y = lm[i].y * h
+            if abs(y - eye_y) <= tol:
+                xs.append(lm[i].x * w)
+        if len(xs) < 2:   # 포인트가 너무 적으면 폴백
+            return eye_band_width_px_simple(bgr)
+
+        return float(max(xs) - min(xs))
+    except Exception:
+        return None
+
 
 def eye_span_px(bgr):
     """
