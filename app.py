@@ -461,49 +461,61 @@ st.session_state.TOTAL_mm = float(TOTAL)
 # =============================
 # =============================
 # =============================
-# 10) 합성 — PD 정합 + 얼굴높이 캡
+# =============================
+# 10) 합성 — PD 정합 + 폭/높이 안전 캡
 # =============================
 face_bgr = st.session_state.face_bgr
 fg_bgra  = st.session_state.fg_bgra
-mid      = st.session_state.mid or (0,0)
+mid      = st.session_state.mid or (0, 0)
 roll     = float(st.session_state.roll or 0.0)
 pitch    = float(st.session_state.pitch or 0.0)
 
 # 탐지값
-PD_px = st.session_state.PD_px_auto           # 양쪽 동공 거리(px)
-Cw_px = st.session_state.Cw_px_auto           # 볼폭(px) — 폴백용
-NC_px = st.session_state.NC_px_auto           # 코끝↔턱 길이(px)
+PD_px = st.session_state.PD_px_auto         # 동공간 거리(px)
+Cw_px = st.session_state.Cw_px_auto         # 볼폭(px)
+NC_px = st.session_state.NC_px_auto         # 코끝↔턱(px)
 
 # 프레임 스펙/원본 크기
-k      = float(st.session_state.k_ratio or 2.0)   # TOTAL/GCD
-TOTAL  = float(st.session_state.TOTAL_mm or 140.0)
+k      = float(st.session_state.k_ratio or 2.0)           # TOTAL / GCD
+TOTAL  = float(st.session_state.TOTAL_mm or 140.0)        # 프레임 총가로(mm)
 GCD    = TOTAL / k if k else (float(row["lens_mm"]) + float(row["bridge_mm"]))
 h_face, w_face = face_bgr.shape[:2]
 h0, w0 = fg_bgra.shape[:2]
+eps = 1e-6
 
-# 1) PD로 'GCD(px)' 정확히 맞추기
-scale = None
-if PD_px is not None and PD_px > 1 and TOTAL > 0 and GCD > 0 and w0 > 0:
-    GCD2PD = 0.92  # PD ≈ 0.92 * GCD
-    gcd_px_target = PD_px / GCD2PD  # 우리가 맞추고 싶은 GCD(px)
-    gcd_px_in_image = w0 * (GCD / TOTAL)  # 트리밍된 프레임 이미지의 현재 GCD(px)
-    scale = float(gcd_px_target / max(gcd_px_in_image, 1e-6))
+# 1) PD → GCD(px) 정확 정합 (가장 신뢰)
+scale_pd = None
+if PD_px and PD_px > 1 and TOTAL > 0 and GCD > 0 and w0 > 0:
+    GCD2PD = 0.92                         # 경험식: PD ≈ 0.92 * GCD
+    gcd_px_target   = PD_px / GCD2PD      # 우리가 맞추려는 GCD(px)
+    gcd_px_in_image = w0 * (GCD / TOTAL)  # 현재 프레임 이미지에서 GCD가 차지하는 px
+    scale_pd = float(gcd_px_target / max(gcd_px_in_image, eps))
 
-# 2) PD가 없거나 실패하면 볼폭 기반 폴백
-if scale is None:
-    ALPHA = 0.80  # TOTAL ≈ ALPHA * cheek_width
-    total_target_px = (Cw_px * ALPHA) if (Cw_px and Cw_px > 1) else (0.60 * w_face)
-    scale = float(total_target_px / max(w0, 1))
+# 2) 볼폭/화면폭 기반 안전 폭(상한) — 과대 방지용
+cap_w_candidates = []
+if Cw_px and Cw_px > 1:
+    cap_w_candidates.append(0.88 * Cw_px)     # 프레임 총가로 ≤ 볼폭의 88%
+cap_w_candidates.append(0.85 * w_face)        # 또는 화면폭의 85%
+cap_total_px = min(cap_w_candidates) if cap_w_candidates else (0.75 * w_face)
 
-# 3) 높이 캡: 선글라스 높이 ≤ 얼굴길이(코↔턱) × 0.65 (없으면 얼굴세로 0.40)
+# PD가 실패하면 폴백으로 총가로를 cap_total_px로 맞춤
+scale_fallback = float(cap_total_px / max(w0, 1))
+
+# 3) 최종 폭 기준 스케일 선택
+scale_by_width = scale_pd if scale_pd is not None else scale_fallback
+# 폭 상한 캡도 한 번 더 적용
+scale_by_width = min(scale_by_width, cap_total_px / max(w0, 1))
+
+# 4) 높이 캡: 선글라스 높이 ≤ (코↔턱)×0.65  (없으면 얼굴 세로×0.40)
 max_h = (0.65 * NC_px) if (NC_px and NC_px > 1) else (0.40 * h_face)
-scale = min(scale, max_h / max(h0, 1))
+scale_by_height = max_h / max(h0, 1)
 
-# 4) 사용자 미세조정
+# 5) 스케일 결정 + 미세조정(사이드바)
+scale = min(scale_by_width, scale_by_height)
 scale *= float(st.session_state.scale_mult)
-scale = float(np.clip(scale, 0.10, 2.50))
+scale = float(np.clip(scale, 0.25, 1.80))  # 과소/과대 모두 방지
 
-# ---- 리사이즈/회전/배치/합성 (이하는 기존과 동일) ----
+# ---- 리사이즈/회전 ----
 new_size = (max(1, int(w0 * scale)), max(1, int(h0 * scale)))
 fg_scaled = cv2.resize(fg_bgra, new_size, interpolation=cv2.INTER_LINEAR)
 M = cv2.getRotationMatrix2D((fg_scaled.shape[1] / 2, fg_scaled.shape[0] / 2), -roll, 1.0)
@@ -512,14 +524,16 @@ fg_rot = cv2.warpAffine(
     flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=(0,0,0,0)
 )
 
+# ---- 배치(눈 중앙 기준 + 피치 보정) ----
 pitch_dy = int((pitch or 0.0) * 0.8)
 if mid == (0, 0):
     gx = int(face_bgr.shape[1] * 0.5 - fg_rot.shape[1] * 0.5) + st.session_state.dx
     gy = int(face_bgr.shape[0] * 0.45 - fg_rot.shape[0] * 0.5) + st.session_state.dy
 else:
-    gx = int(mid[0] - fg_rot.shape[1] * 0.5) + st.session_state.dx
-    gy = int(mid[1] - fg_rot.shape[0] * 0.5) + st.session_state.dy + pitch_dy
+    gx = int(mid[0] - fg_rot.shape[1] * 0.50) + st.session_state.dx
+    gy = int(mid[1] - fg_rot.shape[0] * 0.50) + st.session_state.dy + pitch_dy
 
+# ---- 안전 여백 후 합성 ----
 margin_x, margin_y = 300, 150
 bg_expanded = cv2.copyMakeBorder(
     face_bgr, margin_y, margin_y, margin_x, margin_x,
