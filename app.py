@@ -160,7 +160,7 @@ with st.sidebar:
     st.subheader("🎛️ 스케일 기준 (자동)")
     scale_mode = st.radio(
         "스케일 기준",
-        ["PD↔GCD(권장)", "PD↔TOTAL(강제)", "눈폭↔TOTAL(강제)"],
+        ["PD(권장)", "PD↔TOTAL(강제)", "눈폭↔TOTAL(강제)"],
         index=2,
         help="· PD(권장): PD로 GCD를 맞추고 TOTAL은 k(=TOTAL/GCD)로 변환\n"
              "· 눈폭↔TOTAL: 바깥 눈꼬리(33↔263) 폭에 총너비를 맞춤"
