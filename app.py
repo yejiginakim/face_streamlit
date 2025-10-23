@@ -156,8 +156,8 @@ with st.sidebar:
     st.subheader("🎚️ 위치/스케일(미세조정)")
     st.session_state.dx = st.slider("수평 오프셋(px)", -400, 400, st.session_state.dx)
     st.session_state.dy = st.slider("수직 오프셋(px)", -400, 400, st.session_state.dy)
-    st.session_state.scale_mult = st.slider("스케일(배)", 0.7, 1.3, st.session_state.scale_mult, 0.01,
-                                            help="자동 스케일 기준에서 ±30%만 조정")
+    st.session_state.scale_mult = st.slider("스케일(배)", 0.2, 2.0, float(st.session_state.scale_mult), 0.01,
+                                        help="자동 스케일 기준에서 크게/작게 폭넓게 조정")
 
 colL, colR = st.columns(2)
 with colL:
@@ -459,52 +459,47 @@ st.session_state.k_ratio = float(k)
 st.session_state.TOTAL_mm = float(TOTAL)
 
 # =============================
-# 10) 합성 — 과대 스케일 강제 방지
+# =============================
+# 10) 합성 — 얼굴-핏(face-fit) 고정 스케일
 # =============================
 face_bgr = st.session_state.face_bgr
 fg_bgra  = st.session_state.fg_bgra
 mid      = st.session_state.mid or (0,0)
 roll     = float(st.session_state.roll or 0.0)
 pitch    = float(st.session_state.pitch or 0.0)
-PD_px    = st.session_state.PD_px_auto
-Cw_px    = st.session_state.Cw_px_auto
-NC_px    = st.session_state.NC_px_auto
-k        = float(st.session_state.k_ratio or 2.0)
+
+# 자동 탐지값
+Cw_px    = st.session_state.Cw_px_auto   # 볼폭(px)
+NC_px    = st.session_state.NC_px_auto   # 코끝↔턱 길이(px)
 
 h_face, w_face = face_bgr.shape[:2]
 h0, w0 = fg_bgra.shape[:2]
 
-# 후보 목표폭 (가장 작은 걸 사용)
-cands = []
-# PD 기반 (있으면)
-if PD_px is not None and PD_px > 1:
-    GCD2PD = 0.92
-    cands.append((PD_px / GCD2PD) * k)
-# 볼폭 기반 상한 (강함)
-if Cw_px is not None and Cw_px > 1:
-    cands.append(0.85 * Cw_px)
-# 이미지 폭 기반 상한 (강함)
-cands.append(0.75 * w_face)
-# 모든 게 없을 때 최소 기본치
-if not cands:
-    cands.append(0.65 * w_face)
+# --- 얼굴 기준 목표 총가로 ---
+# ALPHA=0.80 권장 (원하면 0.75~0.85 사이에서 1줄만 바꾸면 됨)
+ALPHA = 0.80
 
-target_total_px = float(min(cands))
+if Cw_px is not None and Cw_px > 1:
+    target_total_px = float(Cw_px) * ALPHA
+else:
+    # 볼폭 감지가 실패했을 때의 안전 폴백(화면 폭 비율)
+    target_total_px = 0.60 * w_face
 
 # 폭 기준 스케일
-scale_w = target_total_px / max(w0, 1)
+scale = target_total_px / max(w0, 1)
 
-# 높이 캡 (얼굴 길이 60%, 없으면 얼굴세로 35%)
-if NC_px is not None and NC_px > 1:
-    max_h = 0.60 * NC_px
+# --- 높이 가드 ---
+# 선글라스 높이 ≤ 얼굴길이(코끝↔턱) × 0.65
+if (NC_px is not None) and (NC_px > 1):
+    max_h = 0.65 * float(NC_px)
 else:
-    max_h = 0.35 * h_face
-scale_h = max_h / max(h0, 1)
+    # 얼굴길이 감지 실패시: 전체 얼굴 세로의 0.40 배
+    max_h = 0.40 * h_face
+scale = min(scale, max_h / max(h0, 1))
 
-scale = min(scale_w, scale_h)
-# 사용자 미세 조정 (±30%만 허용)
+# --- 사용자 미세조정 (넓은 범위) ---
 scale *= float(st.session_state.scale_mult)
-scale = float(np.clip(scale, 0.30, 1.50))
+scale = float(np.clip(scale, 0.10, 2.50))  # 너무 작거나 큰 값 방지
 
 # 리사이즈/회전
 new_size = (max(1, int(w0 * scale)), max(1, int(h0 * scale)))
@@ -534,7 +529,8 @@ gx_e = gx + margin_x
 gy_e = gy + margin_y
 
 out = vision.overlay_rgba(bg_expanded, fg_rot, gx_e, gy_e)
-show_image_bgr(out,
+show_image_bgr(
+    out,
     caption=f"합성 — {row.get('brand','?')} / {row.get('product_id','?')} · {row.get('shape','?')} · FaceFor:{row.get('face_for') or 'Unknown'}"
 )
 
@@ -544,8 +540,11 @@ try:
     rgb = cv2.cvtColor(out, cv2.COLOR_BGR2RGB)
     buf = BytesIO()
     PIL.Image.fromarray(rgb).save(buf, format="PNG")
-    st.download_button("결과 PNG 다운로드", data=buf.getvalue(),
-                       file_name=f"{row.get('product_id','frame')}_result.png", mime="image/png")
+    st.download_button(
+        "결과 PNG 다운로드",
+        data=buf.getvalue(),
+        file_name=f"{row.get('product_id','frame')}_result.png",
+        mime="image/png"
+    )
 except Exception as e:
     st.warning(f"다운로드 준비 중 경고: {e}")
-
